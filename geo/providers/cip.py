@@ -16,7 +16,7 @@ _PATTERN = re.compile(
 )
 
 
-@ip_provider("cip.cc", weight=2)
+@ip_provider("cip.cc", weight=1)
 def _lookup(ip: str) -> GeoInfo | None:
     resp = session.get(
         f"https://www.cip.cc/{ip}",

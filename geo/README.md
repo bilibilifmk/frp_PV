@@ -20,12 +20,13 @@ geo/
 ├── registry.py          # 装饰器注册表（provider/geocoder 注册中心）
 ├── service.py           # GeoService 核心（查询流水线 + 缓存）
 │
-├── providers/           # IP → 地理信息的数据源（10 个）
+├── providers/           # IP → 地理信息的数据源（11 个）
 │   ├── __init__.py      # 自动扫描注册
 │   ├── _http.py         # 共享 HTTP 连接
 │   ├── ip_api.py        # ip-api.com      权重 8（中文、区级）
 │   ├── ipinfo.py        # ipinfo.io       权重 6
 │   ├── freeipapi.py     # freeipapi.com   权重 6
+│   ├── ipquery.py       # ipquery.io      权重 6（免费无需 key，含风险标记，区级内嵌解析）
 │   ├── ipapi_co.py      # ipapi.co        权重 5
 │   ├── ipwho.py         # ipwho.is        权重 5
 │   ├── ipwhois_app.py   # ipwhois.app     权重 5
@@ -38,7 +39,7 @@ geo/
 └── geocoders/           # 地理编码器（地址⇋坐标互转）
     ├── __init__.py      # 自动扫描注册
     ├── nominatim.py     # OpenStreetMap（正向 + 逆向）
-    ├── photon.py        # komoot/photon（正向 + 逆向）
+    ├── photon.py        # komoot/photon（正向 + 逆向，逆向返回街道/小区/街道办级别）
     └── bigdatacloud.py  # BigDataCloud（仅逆向，中文）
 ```
 
@@ -276,3 +277,45 @@ def _reverse(lat: float, lon: float) -> dict | None:
 | `GEOCODE_WAIT_TIMEOUT` | 4 秒 | 并发编码器最大等待 |
 | `COORD_FWD_DISTRICT_BONUS` | 10 | 正向编码区级加分 |
 | `MMDB_PATH` | GeoLite2-City.mmdb | GeoLite2 离线库路径 |
+
+---
+
+## API 探测记录（curl 实测）
+
+### 新增 IP Provider
+
+| API | 端点 | 无需 Key | 详细程度 | 特色字段 |
+|-----|------|----------|----------|----------|
+| **ipquery.io** ✅ | `https://api.ipquery.io/{ip}` | ✔ | 区级 | `risk`（is_vpn/is_tor/is_proxy/is_datacenter）；city 含括号区名如 `"Jinrongjie (Xicheng District)"` |
+
+`split_city_district()` 自动拆解 ipquery 的括号区名，已集成到 `ipquery.py`。
+
+### 测试过但未收录的 API
+
+| API | 状态 | 原因 |
+|-----|------|------|
+| `reallyfreegeoip.org` | 可用但弱 | 仅 country/region/city，无区级 |
+| `geolocation-db.com` | 可用但弱 | 仅 country/state/city，无区级 |
+| `iplocate.io` | 可用 | ASN/公司/滥用联系人详细，但无中文区级 |
+| `geocode.xyz` | 被限速 🚫 | 公开端点严重限速 |
+| `geocode.maps.co` | 需要 Key 🔑 | 已转收费 |
+| `ipgeolocation.io` | 需要 Key 🔑 | — |
+| `ipdata.co` | 需要 Key 🔑 | — |
+| `api.geonames.org` | demo 额度已满 🚫 | demo 账号每日 20000 次限制 |
+| `geocode.xyz` | 限速 🚫 | — |
+
+### Photon Geocoder 修复
+
+原代码使用 `lang=zh` 但 Photon 只支持 `de/en/fr/default`，导致逆向编码始终返回错误 JSON：
+```json
+{"lang":[{"message":"Language is not supported. Supported are: default, de, en, fr"}]}
+```
+修复后改为 `lang=en`；`district`/`locality` 字段仍保留本地语言（中文坐标返回中文街道名）。
+
+photon.komoot.io 服务器在德国，SSL 握手约需 2-3 秒，已将超时由全局 `GEOCODE_TIMEOUT(1, 2)` 提升为本地 `_TIMEOUT = (3, 5)`。
+
+逆向编码示例（坐标 40.2183, 116.2343 → 昌平区）：
+```json
+{"country": "China", "region": "", "city": "Beijing", "district": "城北街道"}
+```
+

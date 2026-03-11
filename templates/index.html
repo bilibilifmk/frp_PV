@@ -186,6 +186,18 @@
                 <label>列表高频访问阈值（次）</label>
                 <input type="number" id="cfg_frequent_threshold" placeholder="例如: 5">
             </div>
+            <div class="m-field">
+                <label>地址显示字段（勾选要显示的部分）</label>
+                <div id="cfg_address_fields" style="display:flex; flex-wrap:wrap; gap:6px 14px; margin-top:6px;">
+                    <label style="margin:0;display:flex;align-items:center;gap:4px;font-size:13px;text-transform:none;cursor:pointer;"><input type="checkbox" value="0" style="width:auto;margin:0;" checked> 国家</label>
+                    <label style="margin:0;display:flex;align-items:center;gap:4px;font-size:13px;text-transform:none;cursor:pointer;"><input type="checkbox" value="1" style="width:auto;margin:0;" checked> 省/州</label>
+                    <label style="margin:0;display:flex;align-items:center;gap:4px;font-size:13px;text-transform:none;cursor:pointer;"><input type="checkbox" value="2" style="width:auto;margin:0;" checked> 城市</label>
+                    <label style="margin:0;display:flex;align-items:center;gap:4px;font-size:13px;text-transform:none;cursor:pointer;"><input type="checkbox" value="3" style="width:auto;margin:0;" checked> 区/县</label>
+                    <label style="margin:0;display:flex;align-items:center;gap:4px;font-size:13px;text-transform:none;cursor:pointer;"><input type="checkbox" value="4" style="width:auto;margin:0;" checked> 社区</label>
+                    <label style="margin:0;display:flex;align-items:center;gap:4px;font-size:13px;text-transform:none;cursor:pointer;"><input type="checkbox" value="5" style="width:auto;margin:0;" checked> 街道</label>
+                    <label style="margin:0;display:flex;align-items:center;gap:4px;font-size:13px;text-transform:none;cursor:pointer;"><input type="checkbox" value="6" style="width:auto;margin:0;" checked> 运营商</label>
+                </div>
+            </div>
             <div class="m-field" style="display:flex; align-items:center; gap:8px;">
                 <input type="checkbox" id="cfg_foreign_highlight" style="width:auto; margin:0;">
                 <label style="margin:0; text-transform:none;">开启境外(非本区) IP 红色高亮与连线</label>
@@ -275,6 +287,7 @@
         homeCountry: "{{ config.home_country | default('中国') }}",
         frequentThreshold: {{ config.get('frequent_threshold', 5) }},
         foreignHighlight: {{ 'true' if config.get('foreign_highlight', True) else 'false' }},
+        addressFields: {{ config.get('address_fields', [0,1,2,3,4,5,6]) | tojson }},
     };
 </script>
 <!-- 主脚本 -->

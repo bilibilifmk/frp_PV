@@ -9,7 +9,7 @@ from geo.providers._http import session
 from geo.registry import ip_provider
 
 
-@ip_provider("ipwho", weight=5)
+@ip_provider("ipwho", weight=8)
 def _lookup(ip: str) -> GeoInfo | None:
     resp = session.get(
         f"http://ipwho.is/{ip}?lang=zh-CN",

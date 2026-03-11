@@ -102,6 +102,7 @@ def create_app() -> tuple[Flask, SocketIO, ConfigManager]:
                 rec["country"] = g.country
                 rec["lat"] = g.lat
                 rec["lon"] = g.lon
+                rec["geo_parts"] = g.geo_parts
                 sio.emit("blocked_geo_update", rec)
         geo.lookup_async(ip, callback=_on_result)
 
@@ -114,7 +115,8 @@ def create_app() -> tuple[Flask, SocketIO, ConfigManager]:
         rec = elog.log_blocked(ip, proxy, reason,
                                cached.desc if cached else "",
                                cached.country if cached else "",
-                               lat=lat, lon=lon)
+                               lat=lat, lon=lon,
+                               geo_parts=cached.geo_parts if cached else None)
         geo_desc = cached.desc if cached and cached.desc else ""
         elog.push_sys(sys_msg, desc=geo_desc, ip=ip, proxy=proxy, reason=reason)
         sio.emit("blocked_update", {"blocked": bans.blocked_count})
@@ -218,6 +220,7 @@ def create_app() -> tuple[Flask, SocketIO, ConfigManager]:
                     "foreign_highlight": cfg.get("foreign_highlight", True),
                     "admin_username": cfg.get("admin_username", "root"),
                     "auto_ban": cfg.get("auto_ban", {}),
+                    "address_fields": cfg.get("address_fields", [0,1,2,3,4,5,6]),
                 },
             })
 
@@ -247,6 +250,7 @@ def create_app() -> tuple[Flask, SocketIO, ConfigManager]:
             "foreign_highlight",
             "auto_ban",
             "admin_username",
+            "address_fields",
         ):
             if key in data:
                 cfg.set(key, data[key])

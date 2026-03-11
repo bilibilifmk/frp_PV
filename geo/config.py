@@ -71,6 +71,8 @@ COUNTRY_NAMES: dict[str, str] = {
     "Netherlands": "荷兰", "Italy": "意大利",
     "Spain": "西班牙", "Sweden": "瑞典",
     "Switzerland": "瑞士", "Taiwan": "台湾", "Hong Kong": "香港",
+    # 特别行政区归一化
+    "香港": "中国香港", "台湾": "中国台湾", "中华民国": "中国台湾",
 }
 
 # ── ISP 翻译 ─────────────────────────────────────────────
@@ -115,6 +117,8 @@ PROVINCE_EN_TO_CN: dict[str, str] = {
     "tibet": "西藏", "xinjiang": "新疆", "yunnan": "云南",
     "zhejiang": "浙江", "taiwan": "台湾",
     "hong kong": "香港", "macau": "澳门",
+    "taipei": "台北", "taipei city": "台北",
+    "kaohsiung": "高雄", "taichung": "台中", "tainan": "台南",
 }
 
 # ── 城市名英文 → 中文 (合并投票用) ────────────────────────

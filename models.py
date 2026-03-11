@@ -38,6 +38,7 @@ class ConnectionRecord:
     desc: str = ""
     time: str = ""
     count: int = 1
+    geo_parts: Optional[list] = None
 
     def to_dict(self) -> dict:
         return asdict(self)

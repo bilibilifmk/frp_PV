@@ -3,9 +3,34 @@
 from __future__ import annotations
 
 from geo.config import (
-    ADMIN_SUFFIXES, CC_MAP, COUNTRY_NAMES,
-    ISP_CN_FULL_TO_SHORT, ISP_EN_TO_CN,
+    ADMIN_SUFFIXES, CC_MAP, CITY_EN_TO_CN, COUNTRY_NAMES,
+    ISP_CN_FULL_TO_SHORT, ISP_EN_TO_CN, PROVINCE_EN_TO_CN,
 )
+
+
+def translate_admin(raw: str) -> str:
+    """英文省/市/区名 → 中文简称, 未知则原样返回.
+
+    也处理 OSM 双语格式: '古洞 Kwu Tung' → '古洞',
+    '金翠路 Kam Chui Road' → '金翠路'.
+    """
+    if not raw:
+        return raw
+    # 若含中文, 提取前缀纯中文词组 (处理 '古洞 Kwu Tung' 类双语地名)
+    if any('\u4e00' <= c <= '\u9fff' for c in raw):
+        # 截取到第一个非中文/非标点的空格前
+        import re as _re
+        m = _re.match(r'^([\u4e00-\u9fff\u3000-\u303f\uff00-\uffef·\-]+)', raw)
+        if m:
+            chinese_part = m.group(1).strip('·- ')
+            if chinese_part:
+                return chinese_part
+        return raw
+    key = raw.lower().strip()
+    result = (PROVINCE_EN_TO_CN.get(key)
+              or CITY_EN_TO_CN.get(key)
+              or COUNTRY_NAMES.get(raw))   # 处理 'Hong Kong' / 'Taiwan' 等
+    return result if result else raw
 
 
 def translate_country(raw: str) -> str:
@@ -40,10 +65,11 @@ def norm_admin(s: str) -> str:
 
 
 def strip_country_prefix(country: str, value: str) -> str:
-    """去地区字段中的国名前缀: '中国北京市' → '北京市'."""
+    """去地区字段中的国名前缀: '中国北京市' → '北京市', '香港,香港' → '香港'."""
     if country and value.startswith(country):
-        return value[len(country) :].strip()
-    return value
+        value = value[len(country):]
+    # 清理前导逗号 (ipwho 对 HK 返回 "香港,香港" → 去前缀后 ",香港")
+    return value.lstrip(", \t，").strip()
 
 
 def split_city_district(raw: str) -> tuple[str, str]:
@@ -56,13 +82,14 @@ def split_city_district(raw: str) -> tuple[str, str]:
 
 def build_desc(
     country: str, region: str, city: str,
-    district: str = "", isp: str = "",
+    district: str = "", locality: str = "", street: str = "",
+    isp: str = "",
 ) -> str:
-    """组装地址: '国家 - 省 · 市 · 区 运营商'."""
+    """组装地址: '国家 - 省 · 市 · 区 · 小区 街道 运营商'."""
     parts: list[str] = []
     seen: set[str] = set()
-    for raw in [country, region, city, district]:
-        p = (raw or "").strip()
+    for raw in [country, region, city, district, locality]:
+        p = (raw or "").strip().lstrip(",，")
         if not p:
             continue
         key = norm_admin(p)
@@ -75,6 +102,8 @@ def build_desc(
     else:
         desc = f"{parts[0]} - {' · '.join(parts[1:])}"
 
+    if street:
+        desc += f" {street.strip()}"
     if isp:
         desc += f" {isp}"
     return desc

@@ -145,7 +145,8 @@ class EventLog:
 
     def log_blocked(self, ip: str, proxy: str, reason: str,
                     desc: str = "", country: str = "",
-                    lat: float = None, lon: float = None) -> dict:
+                    lat: float = None, lon: float = None,
+                    geo_parts: list = None) -> dict:
         rec = {
             "ip": ip, "proxy": proxy, "reason": reason,
             "desc": desc, "country": country,
@@ -154,6 +155,8 @@ class EventLog:
         if lat is not None and lon is not None:
             rec["lat"] = lat
             rec["lon"] = lon
+        if geo_parts is not None:
+            rec["geo_parts"] = geo_parts
         self.push("blocked", rec)
         return rec
 
@@ -208,6 +211,7 @@ class ConnectionTracker:
                     country=geo.country if geo else "",
                     desc=geo.desc if geo else "",
                     time=now,
+                    geo_parts=geo.geo_parts if geo else None,
                 ).to_dict()
                 self._index[key] = rec
                 self._records.append(rec)
@@ -222,6 +226,7 @@ class ConnectionTracker:
                     rec["lon"] = geo.lon
                     rec["desc"] = geo.desc
                     rec["country"] = geo.country
+                    rec["geo_parts"] = geo.geo_parts
                 is_new = False
             is_active = remote_addr in self._active
 
@@ -241,6 +246,7 @@ class ConnectionTracker:
                 "remote_addr": remote_addr,
                 "desc": geo.desc if geo else "",
                 "country": geo.country if geo else "",
+                "geo_parts": geo.geo_parts if geo else None,
             })
 
     @property
@@ -258,6 +264,7 @@ class ConnectionTracker:
                 "elapsed": round(now - info["time"], 1),
                 "desc": geo.desc if geo else "",
                 "country": geo.country if geo else "",
+                "geo_parts": geo.geo_parts if geo else None,
             })
         return result
 
@@ -278,6 +285,7 @@ class ConnectionTracker:
             "time": time.strftime("%Y-%m-%d %H:%M:%S"),
             "desc": geo.desc if geo else "",
             "country": geo.country if geo else "",
+            "geo_parts": geo.geo_parts if geo else None,
             "active": len(self._active),
         }
         self._elog.push("disconn", rec)

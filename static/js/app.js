@@ -11,6 +11,64 @@ const ARC_LIFETIME_MS = (_cfg.arcLifetime || 3600) * 1000;
 const HOME_COUNTRY = _cfg.homeCountry || '中国';
 const FREQUENT_THRESHOLD = _cfg.frequentThreshold || 5;
 let foreignHighlight = _cfg.foreignHighlight !== false;
+let addressFields = new Set(_cfg.addressFields || [0,1,2,3,4,5,6]);
+// geo_parts 索引: 0=国家, 1=省, 2=市, 3=区, 4=社区, 5=街道, 6=ISP
+
+/**
+ * 根据 geo_parts 和当前 addressFields 拼接地址描述.
+ * geo_parts: [country, region, city, district, locality, street, isp]
+ * 回退: 如果 geo_parts 不存在则直接返回 fallbackDesc.
+ */
+function formatDesc(geo_parts, fallbackDesc) {
+    if (!geo_parts || !Array.isArray(geo_parts) || geo_parts.length === 0) {
+        return fallbackDesc || '';
+    }
+
+    // 地址部分 (0-4): country, region, city, district, locality
+    const addrFields = geo_parts.slice(0, 5);
+    const street = geo_parts[5] || '';
+    const isp = geo_parts[6] || '';
+
+    // 去重 (与后端 build_desc 同逻辑)
+    const parts = [];
+    const seen = new Set();
+    for (let i = 0; i < addrFields.length; i++) {
+        if (!addressFields.has(i)) continue;
+        let p = (addrFields[i] || '').trim().replace(/^[,，]+/, '');
+        if (!p) continue;
+        // norm_admin: 去行政区划后缀
+        let key = p;
+        const suffixes = ['省', '市', '区', '县', '自治区', '自治州', '自治县', '特别行政区', '地区', '盟', '州'];
+        for (const s of suffixes) {
+            if (key.endsWith(s) && key.length > s.length) {
+                key = key.slice(0, -s.length);
+                break;
+            }
+        }
+        if (!seen.has(key)) {
+            parts.push(p);
+            seen.add(key);
+        }
+    }
+
+    let desc;
+    if (parts.length <= 1) {
+        desc = parts[0] || '';
+    } else {
+        desc = parts[0] + ' - ' + parts.slice(1).join(' · ');
+    }
+
+    if (addressFields.has(5) && street) desc += ' ' + street.trim();
+    if (addressFields.has(6) && isp) desc += ' ' + isp;
+
+    return desc;
+}
+
+/** 从数据对象中取出按当前级别格式化的地址描述 */
+function getDesc(obj) {
+    if (!obj) return '';
+    return formatDesc(obj.geo_parts, obj.desc || '');
+}
 
 // ── 底图亮度自适应调色板 ────────────────────────────────
 let _basemapDark = true;
@@ -642,7 +700,8 @@ socket.on('connection_opened', (data) => {
             ip: data.ip, module: data.module,
             remote_addr: data.remote_addr,
             since: Math.floor(Date.now() / 1000),
-            desc: data.desc || '', country: data.country || ''
+            desc: data.desc || '', country: data.country || '',
+            geo_parts: data.geo_parts || null
         });
         renderActiveTable();
         updateGlobeThreatData();
@@ -683,7 +742,7 @@ function renderActiveTable() {
     entries.forEach(c => {
         const gk = c.ip + '|' + c.module;
         if (!groups.has(gk)) {
-            groups.set(gk, { ip: c.ip, module: c.module, desc: c.desc || '', country: c.country || '', conns: [] });
+            groups.set(gk, { ip: c.ip, module: c.module, desc: c.desc || '', country: c.country || '', geo_parts: c.geo_parts || null, conns: [] });
         }
         let port = '';
         if (c.remote_addr) {
@@ -714,7 +773,7 @@ function renderActiveTable() {
         return `<tr>
             <td style="color:#555;font-size:12px">${i + 1}</td>
             <td><span class="t-ip">${g.ip}</span></td>
-            <td>${g.desc || '—'}</td>
+            <td>${getDesc(g) || '—'}</td>
             <td>${g.module ? `<span class="t-module">${g.module}</span>` : '<span style="color:#444">—</span>'}</td>
             <td style="text-align:center"><span class="port-badge" data-ports='${JSON.stringify(sortedConns.map(c => ({ port: c.port, since: c.since })))}'>${g.conns.length}</span></td>
             <td style="text-align:center; color:#10b981; font-family:ui-monospace,monospace; font-size:13px;">${formatDuration(elapsed)}</td>
@@ -811,6 +870,7 @@ socket.on('blocked_event', (rec) => {
             const ghost = {
                 ip: rec.ip, lat: rec.lat, lon: rec.lon,
                 desc: rec.desc || '', country: rec.country || '',
+                geo_parts: rec.geo_parts || null,
                 count: 1, time: new Date().toISOString(), _ghost: true
             };
             allIpData.push(ghost);
@@ -836,6 +896,7 @@ socket.on('blocked_geo_update', (rec) => {
         if (r.ip === rec.ip && r.time === rec.time) {
             r.desc = rec.desc;
             r.country = rec.country;
+            r.geo_parts = rec.geo_parts || r.geo_parts;
             break;
         }
     }
@@ -849,6 +910,7 @@ socket.on('blocked_geo_update', (rec) => {
             ghost.lon = rec.lon;
             ghost.desc = rec.desc || ghost.desc;
             ghost.country = rec.country || ghost.country;
+            ghost.geo_parts = rec.geo_parts || ghost.geo_parts;
             delete ghost._mappedData; // 清除缓存的 mapped 数据，强制重建
             delete ghost._baseArc;
             delete ghost._animArc;
@@ -856,6 +918,7 @@ socket.on('blocked_geo_update', (rec) => {
             allIpData.push({
                 ip: rec.ip, lat: rec.lat, lon: rec.lon,
                 desc: rec.desc || '', country: rec.country || '',
+                geo_parts: rec.geo_parts || null,
                 count: 1, time: new Date().toISOString(), _ghost: true
             });
         }
@@ -892,7 +955,7 @@ function renderBlockedTable() {
         return `<tr>
             <td style="color:#555;font-size:12px">${idx}</td>
             <td><span class="t-ip">${r.ip || '—'}</span></td>
-            <td>${r.desc || '—'}</td>
+            <td>${getDesc(r) || '—'}</td>
             <td>${r.proxy ? `<span class="t-module">${r.proxy}</span>` : '<span style="color:#444">—</span>'}</td>
             <td><span style="color:${reasonColor};font-size:12px;">${r.reason || '—'}</span></td>
             <td style="font-family:ui-monospace,monospace;font-size:12px;color:#888;">${timeStr}</td>
@@ -916,10 +979,14 @@ function updateFromData(data) {
     activeData.filter(loc => loc.lat && loc.lon).forEach(loc => {
         if (!loc._mappedData) {
             loc._mappedData = {
-                lat: loc.lat, lng: loc.lon, ip: loc.ip, desc: loc.desc, country: loc.country || ''
+                lat: loc.lat, lng: loc.lon, ip: loc.ip, desc: getDesc(loc), country: loc.country || '',
+                _srcLoc: loc  // 保留引用，地址级别变化时可重建 desc
             };
             loc._baseArc = { ...loc._mappedData, arcType: 'base' };
             loc._animArc = { ...loc._mappedData, arcType: 'anim', _randGap: Math.random() * 2, _randTime: 2500 + Math.random() * 1500 };
+        } else {
+            // 地址级别可能变化，刷新 desc
+            loc._mappedData.desc = getDesc(loc);
         }
         attackPointsData.push(loc._mappedData);
         attackArcsData.push(loc._baseArc);
@@ -950,7 +1017,7 @@ function addLogEntry(loc) {
     const moduleBadge = loc.module ? `<span class="module-badge">${loc.module}</span>` : '';
     const innerHTML = `
         <div><span class="timestamp">[${timeStr}]</span> <strong>${loc.ip}</strong>${moduleBadge}</div>
-        <span class="geo">${loc.desc}</span>
+        <span class="geo">${getDesc(loc)}</span>
     `;
 
     entry.innerHTML = innerHTML;
@@ -1026,7 +1093,7 @@ function addDisconnectLogEntry(data) {
     const durationBadge = dur ? `<span class="module-badge" style="background:rgba(251,191,36,0.15);color:#fbbf24;border-color:rgba(251,191,36,0.3);">&#9201; ${dur}</span>` : '';
     const innerHTML = `
         <div><span class="timestamp" style="color:#10b981">[${timeStr}] 断开</span> <strong>${data.ip}</strong>${moduleBadge}${durationBadge}</div>
-        <span class="geo">${data.desc || ''}</span>
+        <span class="geo">${getDesc(data)}</span>
     `;
     entry.innerHTML = innerHTML;
     logStream.insertBefore(entry, logStream.firstChild);
@@ -1158,7 +1225,7 @@ function renderIpTable(data) {
         <tr title="${loc.ip}" style="${(loc.count || 1) >= FREQUENT_THRESHOLD ? 'background:rgba(239,68,68,0.15);' : ''}">
             <td style="color:#555;font-size:12px">${data.length - i}</td>
             <td><span class="t-ip" style="${(loc.count || 1) >= FREQUENT_THRESHOLD ? 'color:#fca5a5;' : ''}">${loc.ip}</span></td>
-            <td title="${loc.desc || ''}">${loc.desc || '—'}</td>
+            <td title="${getDesc(loc) || ''}">${getDesc(loc) || '—'}</td>
             <td>${loc.module ? `<span class="t-module" title="${loc.module}">${loc.module}</span>` : '<span style="color:#444">—</span>'}</td>
             <td style="text-align:center; font-weight:bold; color: ${(loc.count || 1) >= FREQUENT_THRESHOLD ? '#ef4444' : '#10b981'};">${loc.count || 1}</td>
             <td style="color:#64748b;font-size:12px;font-family:ui-monospace,monospace">${loc.time || '—'}</td>
@@ -1234,6 +1301,12 @@ function openSettings(e) {
                 document.getElementById('cfg_ban_count').value = ab.threshold_count || 10;
                 document.getElementById('cfg_ban_modules').value = (ab.whitelist_modules || []).join('\n');
                 document.getElementById('cfg_ban_ips').value = (ab.whitelist_ips || []).join('\n');
+
+                // 地址字段多选框
+                const af = new Set(cfg.address_fields || [0,1,2,3,4,5,6]);
+                document.querySelectorAll('#cfg_address_fields input[type=checkbox]').forEach(cb => {
+                    cb.checked = af.has(parseInt(cb.value));
+                });
             } else {
                 document.getElementById('modal-msg').innerText = '配置加载失败';
                 document.getElementById('modal-msg').style.color = '#ef4444';
@@ -1267,6 +1340,7 @@ function saveSettings() {
         home_country: document.getElementById('cfg_home_country').value.trim(),
         frequent_threshold: parseInt(document.getElementById('cfg_frequent_threshold').value) || 5,
         foreign_highlight: document.getElementById('cfg_foreign_highlight').checked,
+        address_fields: Array.from(document.querySelectorAll('#cfg_address_fields input[type=checkbox]:checked')).map(cb => parseInt(cb.value)),
         admin_username: document.getElementById('cfg_admin_user').value.trim() || 'root',
         auto_ban: {
             enabled: document.getElementById('cfg_ban_enabled').checked,
@@ -1290,7 +1364,12 @@ function saveSettings() {
             msgEl.style.color = '#10b981';
             msgEl.innerText = data.msg;
             foreignHighlight = payload.foreign_highlight;
+            addressFields = new Set(payload.address_fields);
             updateHighlightBtn();
+            // 刷新所有已渲染的显示
+            updateFromData(allIpData);
+            renderActiveTable();
+            renderBlockedTable();
             setTimeout(closeSettings, 1500);
         } else {
             msgEl.style.color = '#ef4444';

@@ -9,7 +9,7 @@ from geo.providers._http import session
 from geo.registry import ip_provider
 
 
-@ip_provider("freeipapi", weight=6)
+@ip_provider("freeipapi", weight=2)
 def _lookup(ip: str) -> GeoInfo | None:
     resp = session.get(
         f"https://freeipapi.com/api/json/{ip}",

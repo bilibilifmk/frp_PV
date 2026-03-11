@@ -24,7 +24,7 @@ from geo.config import (
     MAX_WORKERS, MMDB_PATH,
     PRIVATE_PREFIXES, PROVIDER_WAIT_TIMEOUT,
 )
-from geo.formatting import norm_admin
+from geo.formatting import norm_admin, strip_country_prefix, translate_admin
 from geo.models import GeoInfo
 from geo.providers.geolite2 import GeoLite2Provider
 from geo.registry import get_fwd_geocoders, get_providers, get_rev_geocoders
@@ -35,6 +35,31 @@ log = logging.getLogger(__name__)
 def _is_cjk(s: str) -> bool:
     """字符串中是否含有中日韩字符."""
     return any('\u4e00' <= c <= '\u9fff' for c in s)
+
+
+# 中国特别行政区 / 特殊前缀: 用于国家名匹配时剥离
+_COUNTRY_PREFIXES = ("中国",)
+
+
+def _country_match(a: str, b: str) -> bool:
+    """比较两个国家名是否等价.
+
+    处理 '中国香港' ≈ '香港', '中国台湾' ≈ '台湾' 等前缀关系.
+    """
+    if not a or not b:
+        return not a and not b
+    na, nb = norm_admin(a), norm_admin(b)
+    if na == nb:
+        return True
+    # 剥离前缀后比较: 中国香港 → 香港
+    for prefix in _COUNTRY_PREFIXES:
+        if na.startswith(prefix) and na != prefix:
+            if na[len(prefix):] == nb:
+                return True
+        if nb.startswith(prefix) and nb != prefix:
+            if nb[len(prefix):] == na:
+                return True
+    return False
 
 
 # ── 纯函数: 国家投票 ──────────────────────────────────────
@@ -68,8 +93,9 @@ def _vote_field(candidates: list[tuple[str, int]]) -> str:
     """加权投票选出最佳文本值.
 
     candidates: [(value, weight), ...]
-    按 norm_admin 归一化分组, 组内权重求和, 取最高分组的最佳字符串.
-    组内优先选中文, 其次选最高权重.
+    按 norm_admin 归一化分组, 组内权重求和.
+    若存在 CJK 候选, 仅在 CJK 分组中选最高权重;
+    否则在所有分组中选最高权重.
     """
     if not candidates:
         return ""
@@ -79,12 +105,18 @@ def _vote_field(candidates: list[tuple[str, int]]) -> str:
         key = norm_admin(val)
         groups.setdefault(key, []).append((val, w))
         totals[key] = totals.get(key, 0) + w
-    best_key = max(totals, key=totals.get)
+
+    # 若有任意 CJK 候选, 限定在 CJK 分组里投票 (简体优先)
+    cjk_totals = {k: v for k, v in totals.items()
+                  if any(_is_cjk(v2) for v2, _ in groups[k])}
+    pool_totals = cjk_totals if cjk_totals else totals
+
+    best_key = max(pool_totals, key=pool_totals.get)
     entries = groups[best_key]
     # 组内: 优先中文, 其次最高权重
-    cjk = [(v, w) for v, w in entries if _is_cjk(v)]
-    pool = cjk or entries
-    return max(pool, key=lambda x: x[1])[0]
+    cjk_entries = [(v, w) for v, w in entries if _is_cjk(v)]
+    best_pool = cjk_entries or entries
+    return max(best_pool, key=lambda x: x[1])[0]
 
 
 # ── 纯函数: 坐标评分 ──────────────────────────────────────
@@ -334,13 +366,20 @@ class GeoService:
         if has_text_no_coords and (merged.region or merged.city):
             self._forward_geocode(merged, coords)
 
-        # 阶段 5: 逆向地理编码 (坐标 → 区级)
-        self._reverse_geocode(merged, coords)
-
-        # 阶段 6: 选择最优坐标
+        # 阶段 5: 选择最优坐标 (先于逆向编码, 确保后续反查基于最终坐标)
         if coords:
             merged.lat, merged.lon = _best_coordinates(
                 coords, city_match_names)
+
+        # 阶段 6: 逆向地理编码 (基于最优坐标, 确保区级地址与经纬度对应)
+        if merged.lat is not None and merged.lon is not None:
+            self._reverse_geocode(merged)
+
+        # 最终清理: 去 region 中残余的国名前缀 / 前导逗号
+        # (多源投票 + 逆向编码后, 可能遗留 '香港,香港' → ',香港' 类脏数据)
+        if merged.region and merged.country:
+            merged.region = strip_country_prefix(
+                merged.country, merged.region)
 
         if not (merged.country or merged.region or merged.lat is not None):
             return None
@@ -397,12 +436,12 @@ class GeoService:
                 continue
             # 仅采纳与投票国家一致的 provider 文本
             country_ok = (not geo.country or not winning_country
-                          or norm_admin(geo.country) == norm_admin(winning_country))
+                          or _country_match(geo.country, winning_country))
             if country_ok:
                 for attr in ("region", "city", "district"):
                     val = getattr(geo, attr)
                     if val:
-                        field_cands[attr].append((val, p.weight))
+                        field_cands[attr].append((translate_admin(val), p.weight))
             if geo.isp:
                 isp_cands.append((geo.isp, p.weight))
             # 坐标始终收集
@@ -457,7 +496,7 @@ class GeoService:
             coords.append(
                 [local.lat, local.lon, 3, "geolite2", False])
         country_ok = (not local.country or not winning_country
-                      or norm_admin(local.country) == norm_admin(winning_country))
+                      or _country_match(local.country, winning_country))
         if country_ok:
             if not merged.country and local.country:
                 merged.country = local.country
@@ -504,15 +543,17 @@ class GeoService:
         finally:
             pool.shutdown(wait=False)
 
-    # ── 阶段 5: 逆向地理编码 ──────────────────────────────
+    # ── 阶段 6: 逆向地理编码 ──────────────────────────────
 
-    def _reverse_geocode(self, merged: GeoInfo, coords: list[list]) -> None:
-        no_dist = [i for i, c in enumerate(coords) if not c[4]]
-        if not no_dist:
-            return
-        # 选权重最高的无区级坐标
-        rep_i = max(no_dist, key=lambda i: coords[i][2])
-        rep_lat, rep_lon = coords[rep_i][0], coords[rep_i][1]
+    def _reverse_geocode(self, merged: GeoInfo) -> None:
+        """基于最优坐标反查地址, 确保文本地址与经纬度对应.
+
+        策略:
+        - region / city: 保留 provider 投票值 (IP 级准确),
+          仅在空值或 CJK 升级时替换.
+        - district / locality / street: 逆向结果优先 (坐标级精确).
+        """
+        lat, lon = merged.lat, merged.lon
 
         geocoders = get_rev_geocoders()
         active = [g for g in geocoders
@@ -527,7 +568,7 @@ class GeoService:
             fs = {
                 pool.submit(
                     self._guarded_call, g.name, g.fn,
-                    rep_lat, rep_lon,
+                    lat, lon,
                 ): g.name
                 for g in active
             }
@@ -535,8 +576,10 @@ class GeoService:
             for f in pending:
                 f.cancel()
 
-            # 按注册顺序 (优先级) 处理结果
-            got_district = False
+            # 收集所有成功的逆向结果 (保持注册顺序), 英文地名预先翻译
+            _ADDR_TEXT_KEYS = ("country", "region", "city", "district",
+                               "locality", "street")
+            addr_results: list[dict] = []
             for g in geocoders:
                 for f in done:
                     if fs.get(f) != g.name:
@@ -545,44 +588,70 @@ class GeoService:
                         addr = f.result()
                     except Exception:
                         addr = None
-                    if not addr or not addr.get("district"):
-                        continue
+                    if addr:
+                        translated = {
+                            k: (translate_admin(v) if k in _ADDR_TEXT_KEYS
+                                and isinstance(v, str) else v)
+                            for k, v in addr.items()
+                        }
+                        addr_results.append(translated)
+                    break  # inner: 每个 geocoder 只取一个 future
 
-                    got_district = True
-                    rev_country = COUNTRY_NAMES.get(
-                        addr.get("country", ""), addr.get("country", ""))
-                    if (rev_country and merged.country
-                            and norm_admin(rev_country) != norm_admin(merged.country)):
+            if not addr_results:
+                return
+
+            # ── 合并逆向结果 ──
+            for addr in addr_results:
+                rev_country = COUNTRY_NAMES.get(
+                    addr.get("country", ""), addr.get("country", ""))
+
+                # 国家一致性检查
+                if (rev_country and merged.country
+                        and not _country_match(rev_country, merged.country)):
+                    # 仅当逆向 CJK 且当前非 CJK 时整体替换
+                    if _is_cjk(rev_country) and not _is_cjk(merged.country):
                         merged.country = rev_country
-                        merged.region = addr.get("region", "")
-                        merged.city = addr.get("city", "")
-                        merged.district = addr["district"]
-                    else:
-                        # 空则填, 或中文覆盖英文
-                        rev_d = addr["district"]
-                        if not merged.district or (
-                                _is_cjk(rev_d) and not _is_cjk(merged.district)):
-                            merged.district = rev_d
-                        rev_c = addr.get("city", "")
-                        if rev_c and (not merged.city or (
-                                _is_cjk(rev_c) and not _is_cjk(merged.city))):
-                            merged.city = rev_c
-                        rev_r = addr.get("region", "")
-                        if rev_r and (not merged.region or (
-                                _is_cjk(rev_r) and not _is_cjk(merged.region))):
-                            merged.region = rev_r
-                        if not merged.country and rev_country:
-                            merged.country = rev_country
-                    break
-                if got_district:
-                    break
+                        for f in ("region", "city", "district",
+                                  "locality", "street"):
+                            v = addr.get(f, "")
+                            if v:
+                                setattr(merged, f, v)
+                    continue  # 国家不匹配, 跳过此 geocoder
 
-            # 标记附近坐标为有区级信息
-            if got_district:
-                for i in no_dist:
-                    c = coords[i]
-                    if (abs(c[0] - rep_lat) < COORD_AGREE_THRESHOLD
-                            and abs(c[1] - rep_lon) < COORD_AGREE_THRESHOLD):
-                        c[4] = True
+                # region / city: 仅 CJK 升级或填空
+                for field in ("region", "city"):
+                    rev_val = addr.get(field, "")
+                    cur_val = getattr(merged, field, "")
+                    if not rev_val:
+                        continue
+                    if not cur_val:
+                        setattr(merged, field, rev_val)
+                    elif _is_cjk(rev_val) and not _is_cjk(cur_val):
+                        setattr(merged, field, rev_val)
+
+                # district: 逆向结果优先 (与选定坐标直接对应)
+                rev_d = addr.get("district", "")
+                if rev_d:
+                    cur_d = merged.district
+                    if not cur_d:
+                        merged.district = rev_d
+                    elif _is_cjk(rev_d):
+                        merged.district = rev_d   # CJK 覆盖一切
+                    elif not _is_cjk(cur_d):
+                        merged.district = rev_d   # 均非 CJK: 逆向更准
+
+                # locality / street: 逆向结果优先
+                for field in ("locality", "street"):
+                    rev_val = addr.get(field, "")
+                    cur_val = getattr(merged, field, "")
+                    if rev_val and (not cur_val
+                                    or (_is_cjk(rev_val)
+                                        and not _is_cjk(cur_val))):
+                        setattr(merged, field, rev_val)
+
+                # country: 仅填空
+                if not merged.country and rev_country:
+                    merged.country = rev_country
+
         finally:
             pool.shutdown(wait=False)
