@@ -1,0 +1,25 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Cesium 容器 */
+.cesium-viewer .cesium-widget-credits { display: none !important; }
+.cesium-viewer { font-family: inherit; }
+
+/* 全局滚动条 */
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,.15); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.25); }
+
+/* Modal backdrop */
+.modal-backdrop {
+  @apply fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50;
+}
+
+/* 通用输入框 */
+.input-box {
+  @apply px-3 py-1.5 bg-gray-800 border border-gray-700 rounded-lg
+         text-sm text-gray-200 focus:outline-none focus:border-brand-500
+         transition-colors;
+}
