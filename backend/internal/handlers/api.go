@@ -40,31 +40,66 @@ func (h *APIHandler) GetSettings(c *gin.Context) {
 	c.JSON(200, gin.H{
 		"status": "success",
 		"data": gin.H{
-			"home_country":        data.HomeCountry,
-			"frequent_threshold":  data.FrequentThreshold,
-			"foreign_highlight":   data.ForeignHighlight,
-			"admin_username":      data.AdminUsername,
-			"auto_ban":            data.AutoBan,
-			"address_fields":      data.AddressFields,
+			"home_country":     data.HomeCountry,
+			"admin_username":   data.AdminUsername,
+			"server_location":  data.ServerLocation,
+			"geo_cache":        data.GeoCache,
+			"firewall_mode":    data.FirewallMode,
+			"auto_ban":         data.AutoBan,
+			"cesium_ion_token": data.CesiumIonToken,
 		},
+	})
+}
+
+// DetectServerLocation POST /api/settings/detect-location
+// 通过服务端公网出口 IP 自动识别服务器位置并立即保存。
+func (h *APIHandler) DetectServerLocation(c *gin.Context) {
+	info := h.geo.DetectServerLocation()
+	if info == nil || info.Lat == nil || info.Lon == nil {
+		c.JSON(200, gin.H{"status": "error", "msg": "自动识别失败，请检查地理位置数据源或手动填写"})
+		return
+	}
+	location := config.ServerLocation{Lat: *info.Lat, Lng: *info.Lon, Name: info.Desc()}
+	if location.Name == "" {
+		location.Name = "自动识别位置"
+	}
+	if err := h.cfg.Update(func(d *config.Data) { d.ServerLocation = location }); err != nil {
+		c.JSON(500, gin.H{"status": "error", "msg": "位置保存失败: " + err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{
+		"status":   "success",
+		"msg":      "已识别并保存服务器位置",
+		"ip":       info.IP,
+		"location": location,
 	})
 }
 
 // UpdateSettings POST /api/settings
 func (h *APIHandler) UpdateSettings(c *gin.Context) {
+	oldFirewallMode := h.cfg.Get().FirewallMode
 	var req struct {
-		HomeCountry       *string         `json:"home_country"`
-		FrequentThreshold *int            `json:"frequent_threshold"`
-		ForeignHighlight  *bool           `json:"foreign_highlight"`
-		AdminUsername     *string         `json:"admin_username"`
-		AutoBan           *config.AutoBan `json:"auto_ban"`
-		AddressFields     *[]int          `json:"address_fields"`
-		ChangePwd         bool            `json:"change_pwd"`
-		OldPassword       string          `json:"old_password"`
-		NewPassword       string          `json:"new_password"`
+		HomeCountry    *string                `json:"home_country"`
+		AdminUsername  *string                `json:"admin_username"`
+		ServerLocation *config.ServerLocation `json:"server_location"`
+		GeoCache       *config.GeoCache       `json:"geo_cache"`
+		FirewallMode   *string                `json:"firewall_mode"`
+		AutoBan        *config.AutoBan        `json:"auto_ban"`
+		CesiumIonToken *string                `json:"cesium_ion_token"`
+		ChangePwd      bool                   `json:"change_pwd"`
+		OldPassword    string                 `json:"old_password"`
+		NewPassword    string                 `json:"new_password"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(400, gin.H{"status": "error", "msg": "请求格式错误"})
+		return
+	}
+	if req.FirewallMode != nil && *req.FirewallMode != "plugin" && *req.FirewallMode != "iptables" {
+		c.JSON(400, gin.H{"status": "error", "msg": "防火墙模式只能是 plugin 或 iptables"})
+		return
+	}
+	if req.AutoBan != nil && (req.AutoBan.ThresholdSeconds <= 0 || req.AutoBan.ThresholdCount <= 0 || req.AutoBan.InitialBanMinutes <= 0 || req.AutoBan.MaxBanMinutes < req.AutoBan.InitialBanMinutes) {
+		c.JSON(400, gin.H{"status": "error", "msg": "自动封禁时间、次数和封禁时长配置无效"})
 		return
 	}
 
@@ -85,30 +120,61 @@ func (h *APIHandler) UpdateSettings(c *gin.Context) {
 			hash, _ := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
 			newHash = string(hash)
 		}
-		_ = h.cfg.Update(func(d *config.Data) { d.AdminPasswordHash = newHash })
+		if err := h.cfg.Update(func(d *config.Data) { d.AdminPasswordHash = newHash }); err != nil {
+			c.JSON(500, gin.H{"status": "error", "msg": "密码保存失败"})
+			return
+		}
 	}
 
 	// 常规字段
-	_ = h.cfg.Update(func(d *config.Data) {
+	if err := h.cfg.Update(func(d *config.Data) {
 		if req.HomeCountry != nil {
 			d.HomeCountry = *req.HomeCountry
-		}
-		if req.FrequentThreshold != nil {
-			d.FrequentThreshold = *req.FrequentThreshold
-		}
-		if req.ForeignHighlight != nil {
-			d.ForeignHighlight = *req.ForeignHighlight
 		}
 		if req.AdminUsername != nil {
 			d.AdminUsername = *req.AdminUsername
 		}
+		if req.ServerLocation != nil {
+			d.ServerLocation = *req.ServerLocation
+		}
+		if req.GeoCache != nil {
+			d.GeoCache = *req.GeoCache
+		}
+		if req.FirewallMode != nil {
+			d.FirewallMode = *req.FirewallMode
+		}
 		if req.AutoBan != nil {
 			d.AutoBan = *req.AutoBan
 		}
-		if req.AddressFields != nil {
-			d.AddressFields = *req.AddressFields
+		if req.CesiumIonToken != nil {
+			d.CesiumIonToken = *req.CesiumIonToken
 		}
-	})
+	}); err != nil {
+		c.JSON(500, gin.H{"status": "error", "msg": "设置保存失败: " + err.Error()})
+		return
+	}
+	if req.FirewallMode != nil || req.AutoBan != nil {
+		var firewallErr error
+		if req.FirewallMode != nil && oldFirewallMode == "iptables" && *req.FirewallMode == "plugin" {
+			firewallErr = h.bans.DisableFirewall()
+		} else if h.bans.Mode() == "iptables" {
+			firewallErr = h.bans.ReconcileFirewall()
+		}
+		if firewallErr != nil {
+			msg := "iptables 同步失败: " + firewallErr.Error()
+			if req.FirewallMode != nil && *req.FirewallMode != oldFirewallMode {
+				_ = h.cfg.Update(func(d *config.Data) { d.FirewallMode = oldFirewallMode })
+				if oldFirewallMode == "iptables" {
+					_ = h.bans.ReconcileFirewall()
+				} else {
+					_ = h.bans.DisableFirewall()
+				}
+				msg = "iptables 同步失败，防火墙模式已回退: " + firewallErr.Error()
+			}
+			c.JSON(200, gin.H{"status": "error", "msg": msg})
+			return
+		}
+	}
 
 	c.JSON(200, gin.H{"status": "success", "msg": "设置保存成功！"})
 }
@@ -124,14 +190,19 @@ func (h *APIHandler) GetData(c *gin.Context) {
 
 // GetFirewall GET /api/firewall
 func (h *APIHandler) GetFirewall(c *gin.Context) {
-	list := h.bans.SortedList()
+	list := h.bans.Records()
 	items := make([]gin.H, len(list))
-	for i, ip := range list {
+	for i, ban := range list {
+		ip := ban.IP
 		desc := ""
 		if g := h.geo.Lookup(ip); g != nil {
 			desc = g.Desc()
 		}
-		items[i] = gin.H{"num": i + 1, "ip": ip, "desc": desc}
+		var until any
+		if ban.BannedUntil != nil {
+			until = ban.BannedUntil.Unix()
+		}
+		items[i] = gin.H{"num": i + 1, "ip": ip, "desc": desc, "strike_count": ban.StrikeCount, "banned_until": until, "permanent": ban.Permanent}
 	}
 	c.JSON(200, gin.H{"status": "success", "data": items})
 }
@@ -149,9 +220,17 @@ func (h *APIHandler) AddFirewall(c *gin.Context) {
 		return
 	}
 
-	h.bans.Ban(ip)
+	ban, err := h.bans.Ban(ip)
+	if err != nil {
+		c.JSON(200, gin.H{"status": "error", "msg": err.Error()})
+		return
+	}
 	h.elog.PushSys("手动封禁: "+ip, "ban", "", "", "", "")
-	c.JSON(200, gin.H{"status": "success", "msg": "已封禁 " + ip + "，后续连接将被 frp 直接拒绝"})
+	msg := "已永久封禁 " + ip
+	if ban.BannedUntil != nil {
+		msg = "已封禁 " + ip + " 至 " + ban.BannedUntil.Format("2006-01-02 15:04:05")
+	}
+	c.JSON(200, gin.H{"status": "success", "msg": msg})
 }
 
 // RemoveFirewall POST /api/firewall/remove
@@ -167,7 +246,10 @@ func (h *APIHandler) RemoveFirewall(c *gin.Context) {
 		return
 	}
 
-	h.bans.Unban(ip)
+	if err := h.bans.Unban(ip); err != nil {
+		c.JSON(200, gin.H{"status": "error", "msg": "解封失败: " + err.Error()})
+		return
+	}
 	h.elog.PushSys("解除封禁: "+ip, "unban", "", "", "", "")
 	h.hub.Emit("unban_ip", gin.H{"ip": ip})
 	c.JSON(200, gin.H{"status": "success", "msg": "已解除对 " + ip + " 的封禁"})

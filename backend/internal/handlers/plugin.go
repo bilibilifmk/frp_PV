@@ -50,6 +50,14 @@ func (h *PluginHandler) Handle(c *gin.Context) {
 	ip := parseRemoteIP(rawAddr)
 
 	allow := gin.H{"reject": false, "unchange": true}
+	// iptables 模式由内核执行拦截；插件响应先返回，统计和自动封禁异步完成。
+	if h.bans.Mode() == "iptables" {
+		c.JSON(http.StatusOK, allow)
+		if ip != "" {
+			go h.processAllowedEvent(op, ip, proxy, rawAddr)
+		}
+		return
+	}
 
 	// CloseUserConn
 	if op == "CloseUserConn" {
@@ -66,6 +74,13 @@ func (h *PluginHandler) Handle(c *gin.Context) {
 		return
 	}
 
+	// 白名单服务和白名单 IP 完全绕过封禁/频率/地域规则。
+	if h.bans.IsWhitelisted(ip, proxy) {
+		h.trackAllowed(ip, proxy, rawAddr)
+		c.JSON(http.StatusOK, allow)
+		return
+	}
+
 	// ① 已在黑名单
 	if h.bans.IsBanned(ip) {
 		h.bans.IncrementBlocked()
@@ -75,23 +90,68 @@ func (h *PluginHandler) Handle(c *gin.Context) {
 	}
 
 	// ② 滑动窗口自动封禁
+	// 国家判断: 优先缓存 → 离线 MMDB 查询 (不阻塞请求).
 	cached := h.geo.GetCached(ip)
 	country := ""
+	locationKnown := false
 	if cached != nil {
 		country = cached.Country
+		locationKnown = hasLocation(cached)
 	}
-	if h.bans.CheckAutoBan(ip, proxy, country) {
+	ab := h.bans.GetAutoBanConfig()
+	if ab.Enabled && ab.ForeignOnly && country == "" {
+		country = h.geo.LookupCountryOffline(ip)
+		locationKnown = locationKnown || country != ""
+	}
+	if h.bans.CheckAutoBan(ip, proxy, country, locationKnown) {
 		h.rejectIP(c, ip, proxy, "自动封禁",
 			"自动封禁: "+ip+" (频繁连接 "+proxy+")", "auto-banned by frp_pv")
 		return
 	}
 
 	// ③ 放行
-	h.tracker.OpenConnection(ip, proxy, rawAddr)
-	h.geo.LookupAsync(ip, func(_ string, _ *geo.Info) {
-		h.tracker.Record(ip, proxy, rawAddr)
-	})
+	h.trackAllowed(ip, proxy, rawAddr)
 	c.JSON(http.StatusOK, allow)
+}
+
+func (h *PluginHandler) processAllowedEvent(op, ip, proxy, rawAddr string) {
+	if op == "CloseUserConn" {
+		h.tracker.CloseConnection(ip, proxy, rawAddr)
+		return
+	}
+	if op != "NewUserConn" {
+		return
+	}
+	if h.bans.IsWhitelisted(ip, proxy) {
+		h.trackAllowed(ip, proxy, rawAddr)
+		return
+	}
+	if h.bans.IsBanned(ip) {
+		return
+	}
+	cached := h.geo.GetCached(ip)
+	country, known := "", false
+	if cached != nil {
+		country, known = cached.Country, hasLocation(cached)
+	}
+	ab := h.bans.GetAutoBanConfig()
+	if ab.Enabled && ab.ForeignOnly && country == "" {
+		country = h.geo.LookupCountryOffline(ip)
+		known = known || country != ""
+	}
+	if h.bans.CheckAutoBan(ip, proxy, country, known) {
+		return
+	}
+	h.trackAllowed(ip, proxy, rawAddr)
+}
+
+func (h *PluginHandler) trackAllowed(ip, proxy, rawAddr string) {
+	h.tracker.OpenConnection(ip, proxy, rawAddr)
+	h.geo.LookupAsync(ip, func(_ string, _ *geo.Info) { h.tracker.Record(ip, proxy, rawAddr) })
+}
+
+func hasLocation(g *geo.Info) bool {
+	return g != nil && (g.Country != "" || g.Region != "" || g.City != "" || g.District != "" || g.Lat != nil || g.Lon != nil)
 }
 
 func (h *PluginHandler) rejectIP(c *gin.Context, ip, proxy, reason, sysMsg, rejectReason string) {
@@ -108,7 +168,7 @@ func (h *PluginHandler) rejectIP(c *gin.Context, ip, proxy, reason, sysMsg, reje
 
 	rec := h.elog.LogBlocked(ip, proxy, reason, desc, country, lat, lon, geoParts)
 	h.elog.PushSys(sysMsg, "ban", desc, ip, proxy, reason)
-	h.hub.Emit("blocked_update", gin.H{"blocked": h.bans.BlockedCount})
+	h.hub.Emit("blocked_update", gin.H{"blocked": h.bans.BlockedCount()})
 	h.hub.Emit("blocked_event", rec)
 
 	if cached == nil {

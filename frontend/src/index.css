@@ -2,6 +2,9 @@
 @tailwind components;
 @tailwind utilities;
 
+/* 全屏撑满 + 禁止溢出 */
+html, body { width: 100%; height: 100%; overflow: hidden; }
+
 /* Cesium 容器 */
 .cesium-viewer .cesium-widget-credits { display: none !important; }
 .cesium-viewer { font-family: inherit; }

@@ -1,0 +1,28 @@
+-- ═══════════════════════════════════════════════════════════
+-- Lua Geocoder 开发指南
+-- ═══════════════════════════════════════════════════════════
+--
+-- 将 .lua 文件放入此目录, 程序启动时自动加载.
+-- 也可通过 POST /api/providers/reload 热加载.
+--
+-- ── 必要全局变量 ──
+--
+--   name   = "geocoder-name"   (必填, 唯一标识)
+--   weight = 4                 (可选, 正向编码权重, 默认 4)
+--
+-- ── 可选函数 (至少实现一个) ──
+--
+--   function forward(query) → {lat, lon}, errStr
+--     正向: 地址文本 → 坐标
+--     query = "海淀区 北京 北京" (区 市 省, 空格分隔)
+--
+--   function reverse(lat, lon) → table, errStr
+--     逆向: 坐标 → 精细地址
+--     返回 table 包含:
+--       country, region, city, district, locality, street
+--
+-- ── 内置模块 ──
+--   同 provider 脚本: http / json / re / translate
+--
+-- ── 工作流 ──
+--   IP 查询 → 投票合并 → 正向编码(补坐标) → 选最优坐标 → 逆向编码(精细地址)

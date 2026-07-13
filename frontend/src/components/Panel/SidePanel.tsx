@@ -11,6 +11,7 @@ interface Props {
   onOpenActive: () => void;
   onOpenIpList: () => void;
   onOpenBlocked: () => void;
+  onOpenLua: () => void;
 }
 
 export default function SidePanel({
@@ -19,6 +20,7 @@ export default function SidePanel({
   onOpenActive,
   onOpenIpList,
   onOpenBlocked,
+  onOpenLua,
 }: Props) {
   const allIpData = useConnectionStore((s) => s.allIpData);
   const activeConnections = useConnectionStore((s) => s.activeConnections);
@@ -34,7 +36,8 @@ export default function SidePanel({
     [allIpData],
   );
 
-  const [collapsed, setCollapsed] = useState(false);
+  // 手机端默认折叠, 不遮挡地球
+  const [collapsed, setCollapsed] = useState(() => window.innerWidth < 768);
 
   async function handleLogout() {
     await logout();
@@ -44,7 +47,7 @@ export default function SidePanel({
   return (
     <div
       className={`absolute top-4 right-4 z-10 transition-all ${
-        collapsed ? 'w-10' : 'w-[420px]'
+        collapsed ? 'w-10' : 'w-[calc(100vw-2rem)] md:w-[420px]'
       }`}
     >
       {/* 折叠按钮 */}
@@ -64,6 +67,7 @@ export default function SidePanel({
           <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-800">
             <h2 className="text-sm font-semibold text-gray-200">系统概览</h2>
             <div className="flex gap-1">
+              <IconBtn title="Lua 脚本" onClick={onOpenLua}>📜</IconBtn>
               <IconBtn title="设置" onClick={onOpenSettings}>⚙</IconBtn>
               <IconBtn title="防火墙" onClick={onOpenFirewall}>🛡</IconBtn>
               <IconBtn title="登出" onClick={handleLogout}>⏻</IconBtn>
@@ -71,7 +75,7 @@ export default function SidePanel({
           </div>
 
           {/* 统计卡片 */}
-          <div className="p-3 grid grid-cols-2 gap-2">
+          <div className="p-2 grid grid-cols-2 gap-1.5 md:p-3 md:gap-2">
             <StatCard label="累计连接频次" value={totalConns} onClick={onOpenIpList} />
             <StatCard label="独立来源 (IP)" value={uniqueIps} onClick={onOpenIpList} />
             <StatCard label="活跃连接" value={activeConnections.size} color="green" onClick={onOpenActive} />
@@ -79,7 +83,7 @@ export default function SidePanel({
           </div>
 
           {/* 日志流 */}
-          <div className="px-4 pb-4">
+          <div className="px-3 pb-3 md:px-4 md:pb-4">
             <h3 className="text-[11px] font-medium text-gray-500 mb-1.5">实时日志</h3>
             <LogStream />
           </div>

@@ -48,7 +48,7 @@ func (h *WSHandler) Handle(c *gin.Context) {
 
 	// 推送初始数据
 	client.SendJSON("init", h.tracker.AllRecords())
-	client.SendJSON("blocked_update", map[string]int{"blocked": h.bans.BlockedCount})
+	client.SendJSON("blocked_update", map[string]int64{"blocked": h.bans.BlockedCount()})
 	client.SendJSON("blocked_init", h.elog.BlockedList())
 	client.SendJSON("active_init", h.tracker.ActiveList())
 	client.SendJSON("connection_opened", map[string]int{"active": h.tracker.ActiveCount()})

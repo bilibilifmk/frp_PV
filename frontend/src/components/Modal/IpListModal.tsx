@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import BaseModal from './BaseModal';
 import { useConnectionStore } from '../../stores/connectionStore';
-import { useSettingsStore } from '../../stores/settingsStore';
+import { useAddressFields } from '../../hooks/useAddressFields';
 import { getDesc } from '../../utils/formatDesc';
 
 interface Props {
@@ -11,11 +11,7 @@ interface Props {
 
 export default function IpListModal({ open, onClose }: Props) {
   const allIpData = useConnectionStore((s) => s.allIpData);
-  const config = useSettingsStore((s) => s.config);
-  const addressFields = useMemo(
-    () => new Set(config?.address_fields ?? [0, 1, 2, 3, 4, 5, 6]),
-    [config?.address_fields],
-  );
+  const addressFields = useAddressFields();
 
   // 按 count 降序
   const sorted = useMemo(

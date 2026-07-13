@@ -36,7 +36,7 @@ export default function LoginPage() {
     <div className="flex items-center justify-center h-screen bg-gray-950">
       <form
         onSubmit={handleSubmit}
-        className="w-80 p-6 bg-gray-900 rounded-xl border border-gray-800 shadow-2xl"
+        className="w-[min(20rem,calc(100vw-2rem))] p-5 sm:p-6 bg-gray-900 rounded-xl border border-gray-800 shadow-2xl"
       >
         <h1 className="text-xl font-bold text-center text-brand-400 mb-6">
           FRP_PV 态势感知

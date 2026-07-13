@@ -39,7 +39,7 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   activeBannedIps: new Set(),
 
   // ── init ──
-  setInit: (data) => set({ allIpData: data }),
+  setInit: (data) => set({ allIpData: Array.isArray(data) ? data : [] }),
 
   // ── new_ip ──
   addNewIp: (rec) =>
@@ -78,12 +78,12 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   setBlockedCount: (n) => set({ blockedCount: n }),
 
   // ── blocked_init ──
-  setBlockedInit: (list) => set({ blockedRecords: list }),
+  setBlockedInit: (list) => set({ blockedRecords: Array.isArray(list) ? list : [] }),
 
   // ── active_init ──
   setActiveInit: (list) => {
     const map = new Map<string, ActiveConnection>();
-    list.forEach((c) => map.set(c.remote_addr, c));
+    if (Array.isArray(list)) list.forEach((c) => map.set(c.remote_addr, c));
     set({ activeConnections: map });
   },
 
@@ -116,7 +116,7 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
     }),
 
   // ── event_log_init ──
-  setEventLogInit: (logs) => set({ eventLog: logs }),
+  setEventLogInit: (logs) => set({ eventLog: Array.isArray(logs) ? logs : [] }),
 
   // ── append single event ──
   addEventLog: (entry) =>

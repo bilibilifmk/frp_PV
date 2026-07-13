@@ -58,7 +58,7 @@ func (el *EventLog) Snapshot() []models.EventEntry {
 // BlockedList 返回所有拦截记录.
 func (el *EventLog) BlockedList() []models.BlockedRecord {
 	entries := el.log.Snapshot()
-	var result []models.BlockedRecord
+	result := make([]models.BlockedRecord, 0)
 	for _, e := range entries {
 		if e.Kind == "blocked" {
 			if rec, ok := e.Data.(models.BlockedRecord); ok {

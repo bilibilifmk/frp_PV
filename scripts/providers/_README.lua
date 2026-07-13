@@ -1,0 +1,42 @@
+-- ═══════════════════════════════════════════════════════════
+-- Lua Provider 开发指南
+-- ═══════════════════════════════════════════════════════════
+--
+-- 将 .lua 文件放入此目录, 程序启动时自动加载.
+-- 也可通过 POST /api/providers/reload 热加载, 无需重启.
+--
+-- ── 必要全局变量 ──
+--
+--   name   = "provider-name"   (必填, 唯一标识)
+--   weight = 3                 (可选, 投票权重, 默认 1)
+--
+-- ── 必要函数 ──
+--
+--   function lookup(ip) → table, errString
+--     返回 table 包含以下字段 (均可选):
+--       country, region, city, district, locality, street
+--       lat, lon  (数字)
+--       isp, ip
+--     失败时返回 nil, "错误信息"
+--
+-- ── 内置模块 ──
+--
+--   http.get(url [, headers])        → {status, body}, err
+--   http.post(url, body [, headers]) → {status, body}, err
+--   json.decode(str)                 → table, err
+--   json.encode(table)               → string, err
+--   re.match(pattern, str)           → captures_table or nil
+--   re.find(pattern, str)            → matched_string or nil  
+--   re.replace(pattern, str, repl)   → new_string
+--   translate.country("US")          → "美国"
+--   translate.isp("China Telecom")   → "电信"
+--   translate.admin("Beijing")       → "北京"
+--   translate.strip_country_prefix(country, value) → cleaned
+--   translate.split_city_district("City (Dist)")   → city, district
+--
+-- ── 注意事项 ──
+--
+--   - 文件名以 _ 或 . 开头会被忽略
+--   - HTTP 超时 5 秒, 不可配置
+--   - 每个脚本运行在独立的 Lua VM, 互不影响
+--   - provider 失败 3 次后自动熔断 3 小时

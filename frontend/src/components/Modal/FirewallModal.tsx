@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import BaseModal from './BaseModal';
 import { apiGet, apiPost } from '../../utils/api';
 import type { FirewallItem } from '../../types';
@@ -11,8 +11,17 @@ interface Props {
 export default function FirewallModal({ open, onClose }: Props) {
   const [items, setItems] = useState<FirewallItem[]>([]);
   const [newIp, setNewIp] = useState('');
+  const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState('');
+
+  const filteredItems = useMemo(() => {
+    const keyword = search.trim().toLowerCase();
+    if (!keyword) return items;
+    return items.filter((item) =>
+      item.ip.toLowerCase().includes(keyword) || item.desc.toLowerCase().includes(keyword),
+    );
+  }, [items, search]);
 
   useEffect(() => {
     if (!open) return;
@@ -50,7 +59,7 @@ export default function FirewallModal({ open, onClose }: Props) {
   }
 
   return (
-    <BaseModal open={open} onClose={onClose} title="IP 防火墙" width="max-w-md">
+    <BaseModal open={open} onClose={onClose} title="IP 防火墙" width="max-w-xl">
       {/* 添加 */}
       <div className="flex gap-2 mb-4">
         <input
@@ -72,12 +81,30 @@ export default function FirewallModal({ open, onClose }: Props) {
 
       {msg && <p className="text-xs text-brand-400 mb-3">{msg}</p>}
 
+      <div className="flex items-center gap-2 mb-3 px-3 py-2 bg-gray-900/70 border border-gray-800 rounded-lg">
+        <span className="text-gray-600" aria-hidden="true">⌕</span>
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="搜索已拦截 IP 或地理位置…"
+          className="bg-transparent outline-none flex-1 text-xs text-gray-200 placeholder:text-gray-600"
+        />
+        <span className="text-[10px] text-gray-600 whitespace-nowrap">
+          {filteredItems.length} / {items.length}
+        </span>
+        {search && (
+          <button onClick={() => setSearch('')} className="text-xs text-gray-500 hover:text-gray-300">清除</button>
+        )}
+      </div>
+
       {/* 列表 */}
       <div className="max-h-[400px] overflow-y-auto space-y-1">
-        {items.length === 0 && (
-          <div className="text-center text-gray-600 text-xs py-6">无封禁 IP</div>
+        {filteredItems.length === 0 && (
+          <div className="text-center text-gray-600 text-xs py-6">
+            {items.length === 0 ? '无封禁 IP' : '没有匹配的 IP'}
+          </div>
         )}
-        {items.map((item) => (
+        {filteredItems.map((item) => (
           <div
             key={item.ip}
             className="flex items-center justify-between px-3 py-2 bg-gray-800/60 rounded-lg"
@@ -87,6 +114,9 @@ export default function FirewallModal({ open, onClose }: Props) {
               {item.desc && (
                 <span className="text-[11px] text-gray-500 ml-2">{item.desc}</span>
               )}
+              <div className="text-[10px] text-gray-600 mt-0.5">
+                第 {item.strike_count} 次 · {item.permanent ? '永久' : item.banned_until ? `至 ${new Date(item.banned_until * 1000).toLocaleString()}` : '已过期'}
+              </div>
             </div>
             <button
               onClick={() => handleRemove(item.ip)}

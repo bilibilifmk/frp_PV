@@ -42,6 +42,9 @@ func NewConnectionTracker(geoSvc *geo.Service, hub *ws.Hub, elog *EventLog) *Con
 func (ct *ConnectionTracker) AllRecords() []models.ConnectionRecord {
 	ct.mu.Lock()
 	defer ct.mu.Unlock()
+	if len(ct.records) == 0 {
+		return []models.ConnectionRecord{}
+	}
 	cp := make([]models.ConnectionRecord, len(ct.records))
 	copy(cp, ct.records)
 	return cp

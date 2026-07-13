@@ -79,11 +79,8 @@ func (h *AuthHandler) CheckAuth(c *gin.Context) {
 		"authenticated": true,
 		"config": gin.H{
 			"server_location":     data.ServerLocation,
-			"arc_lifetime_seconds": data.ArcLifetimeSeconds,
 			"home_country":        data.HomeCountry,
-			"frequent_threshold":  data.FrequentThreshold,
-			"foreign_highlight":   data.ForeignHighlight,
-			"address_fields":      data.AddressFields,
+			"cesium_ion_token":    data.CesiumIonToken,
 		},
 	})
 }
