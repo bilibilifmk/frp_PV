@@ -4,6 +4,7 @@ import { logout } from '../../stores/authStore';
 import { useAuthStore } from '../../stores/authStore';
 import StatCard from './StatCard';
 import LogStream from '../Log/LogStream';
+import FRPLogStream from '../Log/FRPLogStream';
 
 interface Props {
   onOpenSettings: () => void;
@@ -25,6 +26,8 @@ export default function SidePanel({
   const allIpData = useConnectionStore((s) => s.allIpData);
   const activeConnections = useConnectionStore((s) => s.activeConnections);
   const blockedCount = useConnectionStore((s) => s.blockedCount);
+  const demoMode = useConnectionStore((s) => s.demoMode);
+  const setDemoMode = useConnectionStore((s) => s.setDemoMode);
   const setAuth = useAuthStore((s) => s.setAuth);
 
   const totalConns = useMemo(
@@ -65,7 +68,24 @@ export default function SidePanel({
         <div className="bg-gray-900/90 backdrop-blur-sm rounded-xl shadow-2xl border border-gray-800 overflow-hidden">
           {/* 标题栏 */}
           <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-800">
-            <h2 className="text-sm font-semibold text-gray-200">系统概览</h2>
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-semibold text-gray-200">系统概览</h2>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={demoMode}
+                title="新连接建立后自动聚焦来源位置并展示攻击路径"
+                onClick={() => setDemoMode(!demoMode)}
+                className={`flex items-center gap-1.5 rounded-full border px-2 py-1 text-[10px] transition-colors ${
+                  demoMode
+                    ? 'border-brand-500/60 bg-brand-500/15 text-brand-300'
+                    : 'border-gray-700 bg-gray-800 text-gray-500 hover:text-gray-300'
+                }`}
+              >
+                <span className={`h-1.5 w-1.5 rounded-full ${demoMode ? 'bg-brand-400 animate-pulse' : 'bg-gray-600'}`} />
+                演示
+              </button>
+            </div>
             <div className="flex gap-1">
               <IconBtn title="Lua 脚本" onClick={onOpenLua}>📜</IconBtn>
               <IconBtn title="设置" onClick={onOpenSettings}>⚙</IconBtn>
@@ -86,6 +106,7 @@ export default function SidePanel({
           <div className="px-3 pb-3 md:px-4 md:pb-4">
             <h3 className="text-[11px] font-medium text-gray-500 mb-1.5">实时日志</h3>
             <LogStream />
+            <FRPLogStream />
           </div>
         </div>
       )}

@@ -74,6 +74,7 @@ export default function SettingsModal({ open, onClose }: Props) {
         firewall_mode: settings.firewall_mode,
         auto_ban: settings.auto_ban,
         cesium_ion_token: settings.cesium_ion_token,
+        frp_log_path: settings.frp_log_path,
       };
       if (changePwd) {
         body.change_pwd = true;
@@ -127,6 +128,18 @@ export default function SettingsModal({ open, onClose }: Props) {
             <InputField label="Cesium Ion Token" hint="Bing、Sentinel、Blue Marble 等地图图层需要；留空可使用无需 Token 的图层">
               <input type="text" placeholder="粘贴 Ion Access Token" value={settings.cesium_ion_token ?? ''}
                 onChange={(e) => updateField('cesium_ion_token', e.target.value)} className="input-box w-full font-mono text-[11px]" />
+            </InputField>
+          </Section>
+
+          <Section title="FRP 日志" description="读取 frps 或 frpc 日志文件尾部，并在实时日志下方展示连接、代理、断开和错误等关键信息">
+            <InputField label="FRP 日志文件路径" hint="填写运行本服务的系统能够读取的日志文件；留空关闭展示。相对路径以服务启动目录为准">
+              <input
+                type="text"
+                placeholder="例如：/var/log/frp/frps.log"
+                value={settings.frp_log_path ?? ''}
+                onChange={(e) => updateField('frp_log_path', e.target.value)}
+                className="input-box w-full font-mono text-[11px]"
+              />
             </InputField>
           </Section>
 

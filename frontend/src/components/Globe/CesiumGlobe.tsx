@@ -4,7 +4,7 @@ import { useConnectionStore } from '../../stores/connectionStore';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { useAddressFields } from '../../hooks/useAddressFields';
 import { getDesc } from '../../utils/formatDesc';
-import type { ConnectionRecord, ImageryType } from '../../types';
+import type { ConnectionRecord, DemoConnectionEvent, ImageryType } from '../../types';
 
 // ═══════════════════════════════════════════════════════
 //  FlyingLine — 自定义 Cesium Fabric 飞线材质 (GLSL)
@@ -85,6 +85,8 @@ const xMarkerCanvas = (() => {
 interface Props {
   serverLat: number;
   serverLng: number;
+  imageryOverride?: ImageryType;
+  hideUi?: boolean;
 }
 
 /** 弹窗数据: 点击某个坐标点后展示的 IP 列表 */
@@ -96,25 +98,34 @@ interface PointPopup {
   desc: string;
 }
 
-export default function CesiumGlobe({ serverLat, serverLng }: Props) {
+export default function CesiumGlobe({ serverLat, serverLng, imageryOverride, hideUi = false }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<Cesium.Viewer | null>(null);
   const groupsRef = useRef<Map<string, { locs: ConnectionRecord[]; bestDesc: string }>>(new Map());
+  const demoGenerationRef = useRef(0);
+  const demoCleanupsRef = useRef<Array<() => void>>([]);
+  const demoTimersRef = useRef<Array<ReturnType<typeof setTimeout>>>([]);
+  const lastDemoActivityRef = useRef(Date.now());
   const [popup, setPopup] = useState<PointPopup | null>(null);
+  const [demoBusy, setDemoBusy] = useState(false);
 
   const allIpData = useConnectionStore((s) => s.allIpData);
   const activeConnections = useConnectionStore((s) => s.activeConnections);
   const activeBannedIps = useConnectionStore((s) => s.activeBannedIps);
+  const demoMode = useConnectionStore((s) => s.demoMode);
+  const demoQueue = useConnectionStore((s) => s.demoQueue);
+  const shiftDemoEvent = useConnectionStore((s) => s.shiftDemoEvent);
   const config = useSettingsStore((s) => s.config);
 
   const homeCountry = config?.home_country ?? '中国';
   const ionToken = config?.cesium_ion_token ?? '';
 
-  const [imageryType, setImageryType] = useState<ImageryType>(() => {
+  const [selectedImageryType, setSelectedImageryType] = useState<ImageryType>(() => {
     return (localStorage.getItem('frp_pv_imagery_type') as ImageryType) ?? 'dark';
   });
+  const imageryType = imageryOverride ?? selectedImageryType;
   useEffect(() => {
-    const handler = (e: Event) => setImageryType((e as CustomEvent).detail as ImageryType);
+    const handler = (e: Event) => setSelectedImageryType((e as CustomEvent).detail as ImageryType);
     window.addEventListener('frp_pv_imagery_type', handler);
     return () => window.removeEventListener('frp_pv_imagery_type', handler);
   }, []);
@@ -216,6 +227,11 @@ export default function CesiumGlobe({ serverLat, serverLng }: Props) {
     }
 
     return () => {
+      demoGenerationRef.current++;
+      demoCleanupsRef.current.forEach((cleanup) => cleanup());
+      demoCleanupsRef.current = [];
+      demoTimersRef.current.forEach(clearTimeout);
+      demoTimersRef.current = [];
       handler?.destroy();
       viewerRef.current?.destroy();
       viewerRef.current = null;
@@ -724,7 +740,7 @@ export default function CesiumGlobe({ serverLat, serverLng }: Props) {
 
     // 清理不在 wantIds 中的旧实体
     const toRemove = viewer.entities.values.filter(
-      (e) => e.id && !wantIds.has(e.id),
+      (e) => e.id && !e.id.startsWith('__demo_') && !wantIds.has(e.id),
     );
     toRemove.forEach((e) => viewer.entities.remove(e));
 
@@ -756,10 +772,91 @@ export default function CesiumGlobe({ serverLat, serverLng }: Props) {
     };
   }, [allIpData, activeConnections, activeBannedIps, foreignHighlight, homeCountry, addressFields, serverLat, serverLng, arcDedupKm, ptClusterM, minArcDistM]);
 
+  // 关闭演示模式时立即停止镜头、清空临时高亮。
+  useEffect(() => {
+    if (demoMode) return;
+    demoGenerationRef.current++;
+    const viewer = viewerRef.current;
+    if (viewer && !viewer.isDestroyed()) viewer.camera.cancelFlight();
+    demoCleanupsRef.current.forEach((cleanup) => cleanup());
+    demoCleanupsRef.current = [];
+    demoTimersRef.current.forEach(clearTimeout);
+    demoTimersRef.current = [];
+    setDemoBusy(false);
+  }, [demoMode]);
+
+  useEffect(() => {
+    // 服务器位置变化会重建 Viewer，避免旧镜头任务占住队列。
+    demoGenerationRef.current++;
+    setDemoBusy(false);
+  }, [serverLat, serverLng]);
+
+  // 串行消费演示事件；队列积压时缩短镜头时间，但绝不并行控制相机。
+  useEffect(() => {
+    if (!demoMode || demoBusy || demoQueue.length === 0) return;
+    const viewer = viewerRef.current;
+    if (!viewer || viewer.isDestroyed()) return;
+
+    const event = demoQueue[0];
+    const fast = demoQueue.length > 5;
+    const generation = ++demoGenerationRef.current;
+    lastDemoActivityRef.current = Date.now();
+    shiftDemoEvent(event.id);
+    setDemoBusy(true);
+
+    void playDemoTour(viewer, event, serverLat, serverLng, fast, () => generation === demoGenerationRef.current)
+      .then((cleanup) => {
+        if (!cleanup || generation !== demoGenerationRef.current) return;
+        demoCleanupsRef.current.push(cleanup);
+        const timer = setTimeout(() => {
+          cleanup();
+          demoCleanupsRef.current = demoCleanupsRef.current.filter((item) => item !== cleanup);
+        }, fast ? 4_500 : 6_500);
+        demoTimersRef.current.push(timer);
+      })
+      .finally(() => {
+        if (generation === demoGenerationRef.current) setDemoBusy(false);
+      });
+  }, [demoMode, demoBusy, demoQueue, shiftDemoEvent, serverLat, serverLng]);
+
+  // 演示模式长时间无新连接时回到全景并缓慢自转；新事件会通过依赖变化立即清理。
+  useEffect(() => {
+    if (!demoMode || demoBusy || demoQueue.length > 0) return;
+    const viewer = viewerRef.current;
+    if (!viewer || viewer.isDestroyed()) return;
+
+    let cancelled = false;
+    let spinFrame = 0;
+    const idleFor = Date.now() - lastDemoActivityRef.current;
+    const idleTimer = setTimeout(() => {
+      if (cancelled || viewer.isDestroyed()) return;
+      void flyCameraToOverview(viewer.camera, serverLat, serverLng, 2.8).then(() => {
+        if (cancelled || viewer.isDestroyed()) return;
+        let previous = performance.now();
+        const spin = (now: number) => {
+          if (cancelled || viewer.isDestroyed()) return;
+          const elapsed = Math.min(50, now - previous);
+          previous = now;
+          viewer.camera.rotate(Cesium.Cartesian3.UNIT_Z, -0.000012 * elapsed);
+          viewer.scene.requestRender();
+          spinFrame = requestAnimationFrame(spin);
+        };
+        spinFrame = requestAnimationFrame(spin);
+      });
+    }, Math.max(0, 30_000 - idleFor));
+
+    return () => {
+      cancelled = true;
+      clearTimeout(idleTimer);
+      if (spinFrame) cancelAnimationFrame(spinFrame);
+      if (!viewer.isDestroyed()) viewer.camera.cancelFlight();
+    };
+  }, [demoMode, demoBusy, demoQueue.length, serverLat, serverLng]);
+
   return (
     <div className="absolute inset-0 w-full h-full">
       <div ref={containerRef} className="absolute inset-0 w-full h-full" />
-      {popup && (
+      {!hideUi && popup && (
         <PointPopupOverlay
           popup={popup}
           addressFields={addressFields}
@@ -772,6 +869,289 @@ export default function CesiumGlobe({ serverLat, serverLng }: Props) {
       )}
     </div>
   );
+}
+
+async function playDemoTour(
+  viewer: Cesium.Viewer,
+  event: DemoConnectionEvent,
+  serverLat: number,
+  serverLng: number,
+  fast: boolean,
+  isCurrent: () => boolean,
+): Promise<(() => void) | null> {
+  const geodesic = new Cesium.EllipsoidGeodesic(
+    Cesium.Cartographic.fromDegrees(event.lon, event.lat),
+    Cesium.Cartographic.fromDegrees(serverLng, serverLat),
+  );
+  const surfaceDistance = geodesic.surfaceDistance;
+  // 短距离连接无需抢占镜头；远距离才执行“聚焦来源 → 沿线滚动”的完整演示。
+  const followCamera = surfaceDistance >= 800_000;
+  const cleanupSource = drawDemoSource(viewer, event);
+  const abort = () => {
+    cleanupSource();
+    return null;
+  };
+
+  try {
+    if (followCamera) {
+      viewer.camera.cancelFlight();
+      await flyCameraToPoint(
+        viewer.camera,
+        Cesium.Cartesian3.fromDegrees(event.lon, event.lat),
+        fast ? 320_000 : 180_000,
+        fast ? 2 : 2.8,
+        Cesium.Math.toRadians(28),
+        Cesium.Math.toRadians(-68),
+      );
+      if (!isCurrent() || viewer.isDestroyed()) return abort();
+
+      // 完成来源地聚焦后才开始画线，避免镜头与路径同时突然出现。
+      await wait(fast ? 220 : 380);
+      if (!isCurrent() || viewer.isDestroyed()) return abort();
+    }
+
+    // 绘线路径的同时让镜头沿弧线移动、旋转并逐渐拉远。
+    const animation = drawDemoConnection(
+      viewer,
+      event,
+      serverLat,
+      serverLng,
+      fast,
+      followCamera,
+      surfaceDistance,
+      isCurrent,
+    );
+    await animation.finished;
+    if (!isCurrent() || viewer.isDestroyed()) {
+      animation.cleanup();
+      return abort();
+    }
+    return () => {
+      animation.cleanup();
+      cleanupSource();
+    };
+  } catch (error) {
+    cleanupSource();
+    throw error;
+  }
+}
+
+function flyCameraToPoint(
+  camera: Cesium.Camera,
+  target: Cesium.Cartesian3,
+  range: number,
+  duration: number,
+  heading: number,
+  pitch: number,
+) {
+  return new Promise<void>((resolve) => {
+    let settled = false;
+    const settle = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(watchdog);
+      resolve();
+    };
+    const watchdog = setTimeout(() => {
+      camera.cancelFlight();
+      settle();
+    }, duration * 1_000 + 1_500);
+    // 以来源坐标为观察中心；倾斜或旋转相机时目标点仍保持在画面正中。
+    camera.flyToBoundingSphere(new Cesium.BoundingSphere(target, 0), {
+      duration,
+      offset: new Cesium.HeadingPitchRange(heading, pitch, range),
+      easingFunction: Cesium.EasingFunction.CUBIC_IN_OUT,
+      complete: settle,
+      cancel: settle,
+    });
+  });
+}
+
+function flyCameraToOverview(camera: Cesium.Camera, lat: number, lng: number, duration: number) {
+  return new Promise<void>((resolve) => {
+    let settled = false;
+    const settle = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(watchdog);
+      resolve();
+    };
+    const watchdog = setTimeout(() => {
+      camera.cancelFlight();
+      settle();
+    }, duration * 1_000 + 1_500);
+    camera.flyTo({
+      destination: Cesium.Cartesian3.fromDegrees(lng, lat, 18_000_000),
+      duration,
+      orientation: { heading: 0, pitch: -Cesium.Math.PI_OVER_TWO, roll: 0 },
+      easingFunction: Cesium.EasingFunction.CUBIC_IN_OUT,
+      complete: settle,
+      cancel: settle,
+    });
+  });
+}
+
+function wait(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+function drawDemoSource(viewer: Cesium.Viewer, event: DemoConnectionEvent) {
+  const sourceId = `__demo_source_${event.id}`;
+  viewer.entities.add({
+    id: sourceId,
+    position: Cesium.Cartesian3.fromDegrees(event.lon, event.lat),
+    point: {
+      pixelSize: 14,
+      color: Cesium.Color.fromCssColorString('#00ffd5'),
+      outlineColor: Cesium.Color.fromCssColorString('#bafff2').withAlpha(0.55),
+      outlineWidth: 10,
+      disableDepthTestDistance: Number.POSITIVE_INFINITY,
+    },
+    label: {
+      text: event.module ? `${event.ip} · ${event.module}` : event.ip,
+      font: 'bold 12px sans-serif',
+      fillColor: Cesium.Color.WHITE,
+      outlineColor: Cesium.Color.BLACK,
+      outlineWidth: 3,
+      style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+      verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+      pixelOffset: new Cesium.Cartesian2(0, -19),
+      disableDepthTestDistance: Number.POSITIVE_INFINITY,
+    },
+  });
+  viewer.scene.requestRender();
+
+  return () => {
+    if (viewer.isDestroyed()) return;
+    const entity = viewer.entities.getById(sourceId);
+    if (entity) viewer.entities.remove(entity);
+    viewer.scene.requestRender();
+  };
+}
+
+function drawDemoConnection(
+  viewer: Cesium.Viewer,
+  event: DemoConnectionEvent,
+  serverLat: number,
+  serverLng: number,
+  fast: boolean,
+  followCamera: boolean,
+  surfaceDistance: number,
+  isCurrent: () => boolean,
+) {
+  const lineId = `__demo_line_${event.id}`;
+  const hitId = `__demo_hit_${event.id}`;
+  const positions = computeArc(event.lon, event.lat, serverLng, serverLat, 180);
+  const cameraGeodesic = new Cesium.EllipsoidGeodesic(
+    Cesium.Cartographic.fromDegrees(event.lon, event.lat),
+    Cesium.Cartographic.fromDegrees(serverLng, serverLat),
+  );
+  const startedAt = performance.now();
+  const duration = fast ? 4_500 : 6_200;
+  let progress = 0;
+  let frameId = 0;
+  let finished = false;
+  let watchdog = 0;
+  let resolveFinished!: () => void;
+  const finishedPromise = new Promise<void>((resolve) => {
+    resolveFinished = resolve;
+  });
+
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    if (watchdog) window.clearTimeout(watchdog);
+    if (!viewer.isDestroyed() && followCamera) {
+      // 解除局部坐标锁定，保留当前画面并恢复 Cesium 的正常相机控制。
+      viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
+    }
+    resolveFinished();
+  };
+
+  const animatedPositions = new Cesium.CallbackProperty(() => {
+    const count = Math.max(2, Math.min(positions.length, Math.ceil(progress * positions.length)));
+    return positions.slice(0, count);
+  }, false);
+
+  viewer.entities.add({
+    id: lineId,
+    polyline: {
+      positions: animatedPositions,
+      width: 4,
+      material: new Cesium.PolylineGlowMaterialProperty({
+        color: Cesium.Color.fromCssColorString('#00ffd5'),
+        glowPower: 0.28,
+        taperPower: 0.75,
+      }),
+    },
+  });
+  viewer.entities.add({
+    id: hitId,
+    position: Cesium.Cartesian3.fromDegrees(serverLng, serverLat),
+    point: {
+      show: new Cesium.CallbackProperty(() => progress > 0.9, false),
+      pixelSize: 16,
+      color: Cesium.Color.WHITE.withAlpha(0.9),
+      outlineColor: Cesium.Color.fromCssColorString('#00ff9d').withAlpha(0.55),
+      outlineWidth: 12,
+      disableDepthTestDistance: Number.POSITIVE_INFINITY,
+    },
+  });
+
+  const tick = (now: number) => {
+    if (viewer.isDestroyed() || !isCurrent()) {
+      finish();
+      return;
+    }
+    const rawProgress = Math.min(1, (now - startedAt) / duration);
+    // smoothstep 让线路和镜头在起止位置自然加减速。
+    progress = rawProgress * rawProgress * (3 - 2 * rawProgress);
+
+    if (followCamera) {
+      const cartographic = cameraGeodesic.interpolateUsingFraction(progress);
+      const target = Cesium.Cartesian3.fromRadians(cartographic.longitude, cartographic.latitude);
+      const targetRange = Math.min(9_000_000, Math.max(2_200_000, surfaceDistance * 0.58));
+      const initialRange = fast ? 320_000 : 180_000;
+      const zoomProgress = Math.min(1, progress / 0.42);
+      const smoothZoom = zoomProgress * zoomProgress * (3 - 2 * zoomProgress);
+      const range = Cesium.Math.lerp(initialRange, targetRange, smoothZoom);
+      const heading = Cesium.Math.lerp(
+        Cesium.Math.toRadians(28),
+        Cesium.Math.toRadians(-28),
+        progress,
+      );
+      const pitch = Cesium.Math.lerp(
+        Cesium.Math.toRadians(-68),
+        Cesium.Math.toRadians(-48),
+        progress,
+      );
+      viewer.camera.lookAt(target, new Cesium.HeadingPitchRange(heading, pitch, range));
+    }
+
+    viewer.scene.requestRender();
+    if (rawProgress < 1) frameId = requestAnimationFrame(tick);
+    else finish();
+  };
+  frameId = requestAnimationFrame(tick);
+  watchdog = window.setTimeout(() => {
+    if (frameId) cancelAnimationFrame(frameId);
+    progress = 1;
+    if (!viewer.isDestroyed()) viewer.scene.requestRender();
+    finish();
+  }, duration + 2_000);
+
+  const cleanup = () => {
+    if (frameId) cancelAnimationFrame(frameId);
+    finish();
+    if (viewer.isDestroyed()) return;
+    for (const id of [lineId, hitId]) {
+      const entity = viewer.entities.getById(id);
+      if (entity) viewer.entities.remove(entity);
+    }
+    viewer.scene.requestRender();
+  };
+
+  return { cleanup, finished: finishedPromise };
 }
 
 // ═══════════════════════════════════════════════════════
@@ -861,6 +1241,7 @@ function PointPopupOverlay({
 function computeArc(
   lon1: number, lat1: number,
   lon2: number, lat2: number,
+  minSegments = 0,
 ): Cesium.Cartesian3[] {
   const startCart = Cesium.Cartographic.fromDegrees(lon1, lat1);
   const endCart = Cesium.Cartographic.fromDegrees(lon2, lat2);
@@ -875,10 +1256,11 @@ function computeArc(
   const maxHeight = Math.max(rawHeight, MIN_HEIGHT);
 
   // 分级采样段数
-  const segments = dist < 200_000 ? 12
+  const baseSegments = dist < 200_000 ? 12
     : dist < 500_000 ? 20
     : dist < 2_000_000 ? 35
     : 50;
+  const segments = Math.max(baseSegments, minSegments);
 
   const positions: Cesium.Cartesian3[] = [];
   for (let i = 0; i <= segments; i++) {

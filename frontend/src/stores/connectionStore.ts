@@ -5,7 +5,10 @@ import type {
   ActiveConnection,
   DisconnectRecord,
   EventEntry,
+  DemoConnectionEvent,
 } from '../types';
+
+const recentDemoIPs = new Map<string, number>();
 
 interface ConnectionState {
   allIpData: ConnectionRecord[];
@@ -14,6 +17,8 @@ interface ConnectionState {
   blockedCount: number;
   eventLog: EventEntry[];
   activeBannedIps: Set<string>;
+  demoMode: boolean;
+  demoQueue: DemoConnectionEvent[];
 
   setInit: (data: ConnectionRecord[]) => void;
   addNewIp: (rec: ConnectionRecord) => void;
@@ -28,6 +33,8 @@ interface ConnectionState {
   setEventLogInit: (logs: EventEntry[]) => void;
   addEventLog: (entry: EventEntry) => void;
   unbanIp: (ip: string) => void;
+  setDemoMode: (enabled: boolean) => void;
+  shiftDemoEvent: (id: string) => void;
 }
 
 export const useConnectionStore = create<ConnectionState>((set) => ({
@@ -37,6 +44,9 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   blockedCount: 0,
   eventLog: [],
   activeBannedIps: new Set(),
+  // 演示会主动控制镜头，每次打开页面均保持关闭，由用户手动开启。
+  demoMode: false,
+  demoQueue: [],
 
   // ── init ──
   setInit: (data) => set({ allIpData: Array.isArray(data) ? data : [] }),
@@ -92,9 +102,10 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
     set((s) => {
       const map = new Map(s.activeConnections);
       const addr = data.remote_addr as string;
+      const ip = data.ip as string;
       if (addr) {
         map.set(addr, {
-          ip: data.ip as string,
+          ip,
           module: data.module as string,
           remote_addr: addr,
           since: Math.floor(Date.now() / 1000),
@@ -104,7 +115,41 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
           geo_parts: data.geo_parts as string[] | undefined,
         });
       }
-      return { activeConnections: map };
+
+      let demoQueue = s.demoQueue;
+      if (s.demoMode && ip && addr) {
+        const fallback = s.allIpData.find(
+          (record) => record.ip === ip && record.lat != null && record.lon != null,
+        );
+        const lat = typeof data.lat === 'number' ? data.lat : fallback?.lat;
+        const lon = typeof data.lon === 'number' ? data.lon : fallback?.lon;
+        const now = Date.now();
+        const lastSeen = recentDemoIPs.get(ip) ?? 0;
+        // 同一 IP 短时间内只演示一次，防止扫描流量反复抢占相机。
+        if (
+          lat != null && lon != null &&
+          Number.isFinite(lat) && Number.isFinite(lon) &&
+          now - lastSeen >= 8_000
+        ) {
+          recentDemoIPs.set(ip, now);
+          if (recentDemoIPs.size > 500) {
+            for (const [key, timestamp] of recentDemoIPs) {
+              if (now - timestamp > 60_000) recentDemoIPs.delete(key);
+            }
+          }
+          const event: DemoConnectionEvent = {
+            id: `${now}-${ip}-${Math.random().toString(36).slice(2, 7)}`,
+            ip,
+            module: (data.module as string) || '',
+            lat,
+            lon,
+            time: now,
+          };
+          // 高并发时只保留最近 8 个待播放事件。
+          demoQueue = [...demoQueue, event].slice(-8);
+        }
+      }
+      return { activeConnections: map, demoQueue };
     }),
 
   // ── connection_closed ──
@@ -129,4 +174,12 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
       banned.delete(ip);
       return { activeBannedIps: banned };
     }),
+
+  setDemoMode: (enabled) => {
+    if (!enabled) recentDemoIPs.clear();
+    set({ demoMode: enabled, demoQueue: [] });
+  },
+
+  shiftDemoEvent: (id) =>
+    set((s) => ({ demoQueue: s.demoQueue.filter((event) => event.id !== id) })),
 }));

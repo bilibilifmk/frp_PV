@@ -1,6 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useSettingsStore } from '../stores/settingsStore';
+import { useConnectionStore } from '../stores/connectionStore';
 import { useWebSocket } from '../hooks/useWebSocket';
+import { parsePresentationParams } from '../utils/presentationParams';
 import CesiumGlobe from '../components/Globe/CesiumGlobe';
 import ImageryPicker from '../components/Globe/ImageryPicker';
 import NavigationHelp from '../components/Globe/NavigationHelp';
@@ -16,10 +18,24 @@ import LuaModal from '../components/Modal/LuaModal';
 
 export default function Dashboard() {
   const config = useSettingsStore((s) => s.config);
+  const setDemoMode = useConnectionStore((s) => s.setDemoMode);
   useWebSocket();
 
   const [modal, setModal] = useState<string | null>(null);
+  const [presentation, setPresentation] = useState(parsePresentationParams);
   const close = () => setModal(null);
+
+  useEffect(() => {
+    const applyHash = () => {
+      const next = parsePresentationParams();
+      setPresentation(next);
+      setDemoMode(next.demo);
+      if (next.hideUi) setModal(null);
+    };
+    applyHash();
+    window.addEventListener('hashchange', applyHash);
+    return () => window.removeEventListener('hashchange', applyHash);
+  }, [setDemoMode]);
 
   if (!config) {
     return (
@@ -40,43 +56,55 @@ export default function Dashboard() {
         <CesiumGlobe
           serverLat={config.server_location.lat}
           serverLng={config.server_location.lng}
+          imageryOverride={presentation.imagery}
+          hideUi={presentation.hideUi}
         />
       </ErrorBoundary>
 
       {/* 底图工具栏: 底图选择 + 导航帮助 */}
-      <div className="absolute bottom-14 right-3 z-20 flex items-end gap-2
-                      sm:bottom-10 sm:right-4">
-        <GlobeToolbar />
-        <ImageryPicker />
-        <NavigationHelp />
-      </div>
+      {!presentation.hideUi && (
+        <div className="absolute bottom-14 right-3 z-20 flex items-end gap-2
+                        sm:bottom-10 sm:right-4">
+          <GlobeToolbar />
+          <ImageryPicker />
+          <NavigationHelp />
+        </div>
+      )}
 
       {/* 侧面板 */}
-      <SidePanel
-        onOpenSettings={() => setModal('settings')}
-        onOpenFirewall={() => setModal('firewall')}
-        onOpenActive={() => setModal('active')}
-        onOpenIpList={() => setModal('iplist')}
-        onOpenBlocked={() => setModal('blocked')}
-        onOpenLua={() => setModal('lua')}
-      />
+      {!presentation.hideUi && (
+        <SidePanel
+          onOpenSettings={() => setModal('settings')}
+          onOpenFirewall={() => setModal('firewall')}
+          onOpenActive={() => setModal('active')}
+          onOpenIpList={() => setModal('iplist')}
+          onOpenBlocked={() => setModal('blocked')}
+          onOpenLua={() => setModal('lua')}
+        />
+      )}
 
       {/* 底部状态栏 */}
-      <div className="absolute bottom-0 left-0 right-0 h-7 bg-gray-900/70 backdrop-blur-sm
-                      border-t border-gray-800 flex items-center px-4 text-[11px] text-gray-500 z-10
-                      pb-[env(safe-area-inset-bottom)]">
-        <span>FRP_PV v2.0</span>
-        <span className="mx-2">·</span>
-        <span>服务器: {config.server_location.name || '未知'}</span>
-      </div>
+      {!presentation.hideUi && (
+        <div className="absolute bottom-0 left-0 right-0 h-7 bg-gray-900/70 backdrop-blur-sm
+                        border-t border-gray-800 flex items-center px-4 text-[11px] text-gray-500 z-10
+                        pb-[env(safe-area-inset-bottom)]">
+          <span>FRP_PV v2.0</span>
+          <span className="mx-2">·</span>
+          <span>服务器: {config.server_location.name || '未知'}</span>
+        </div>
+      )}
 
       {/* 模态框 */}
-      <SettingsModal open={modal === 'settings'} onClose={close} />
-      <FirewallModal open={modal === 'firewall'} onClose={close} />
-      <ActiveModal open={modal === 'active'} onClose={close} />
-      <IpListModal open={modal === 'iplist'} onClose={close} />
-      <BlockedModal open={modal === 'blocked'} onClose={close} />
-      <LuaModal open={modal === 'lua'} onClose={close} />
+      {!presentation.hideUi && (
+        <>
+          <SettingsModal open={modal === 'settings'} onClose={close} />
+          <FirewallModal open={modal === 'firewall'} onClose={close} />
+          <ActiveModal open={modal === 'active'} onClose={close} />
+          <IpListModal open={modal === 'iplist'} onClose={close} />
+          <BlockedModal open={modal === 'blocked'} onClose={close} />
+          <LuaModal open={modal === 'lua'} onClose={close} />
+        </>
+      )}
     </div>
   );
 }

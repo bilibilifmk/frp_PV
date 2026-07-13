@@ -205,6 +205,7 @@ func main() {
 		api.GET("/settings", apiH.GetSettings)
 		api.POST("/settings", apiH.UpdateSettings)
 		api.POST("/settings/detect-location", apiH.DetectServerLocation)
+		api.GET("/frp-log", apiH.GetFRPLog)
 		api.GET("/firewall", apiH.GetFirewall)
 		api.POST("/firewall/add", apiH.AddFirewall)
 		api.POST("/firewall/remove", apiH.RemoveFirewall)

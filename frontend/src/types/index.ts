@@ -68,6 +68,7 @@ export interface AppConfig {
 export interface Settings {
   home_country: string;
   admin_username: string;
+  frp_log_path: string;
   server_location: ServerLocation;
   geo_cache: {
     normal_ttl_days: number;
@@ -78,6 +79,13 @@ export interface Settings {
   firewall_mode: 'plugin' | 'iptables';
   auto_ban: AutoBan;
   cesium_ion_token: string;
+}
+
+export interface FRPLogEntry {
+  time: string;
+  level: 'info' | 'warn' | 'error';
+  category: string;
+  message: string;
 }
 
 // ── WebSocket 数据模型 ──
@@ -115,6 +123,16 @@ export interface ActiveConnection {
   desc: string;
   country: string;
   geo_parts?: string[];
+}
+
+/** 演示模式中的一次新连接镜头事件 */
+export interface DemoConnectionEvent {
+  id: string;
+  ip: string;
+  module: string;
+  lat: number;
+  lon: number;
+  time: number;
 }
 
 export interface DisconnectRecord {

@@ -50,6 +50,7 @@ type Data struct {
 	AutoBan           AutoBan        `json:"auto_ban"`
 	GeoCache          GeoCache       `json:"geo_cache"`
 	CesiumIonToken    string         `json:"cesium_ion_token,omitempty"`
+	FRPLogPath        string         `json:"frp_log_path,omitempty"`
 }
 
 // BanRecord 是 bans 表的一行。BannedUntil 为 nil 表示永久封禁。

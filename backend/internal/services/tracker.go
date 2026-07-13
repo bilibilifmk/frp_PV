@@ -112,15 +112,18 @@ func (ct *ConnectionTracker) Record(ip, module, remoteAddr string) {
 	if isActive {
 		desc, country := "", ""
 		var geoParts []string
+		var lat, lon *float64
 		if g != nil {
 			desc = g.Desc()
 			country = g.Country
 			geoParts = g.GeoParts()
+			lat, lon = g.Lat, g.Lon
 		}
 		ct.hub.Emit("connection_opened", map[string]interface{}{
 			"ip": ip, "module": module, "active": ct.ActiveCount(),
 			"remote_addr": remoteAddr,
-			"desc": desc, "country": country, "geo_parts": geoParts,
+			"desc":        desc, "country": country, "geo_parts": geoParts,
+			"lat": lat, "lon": lon,
 		})
 	}
 }
