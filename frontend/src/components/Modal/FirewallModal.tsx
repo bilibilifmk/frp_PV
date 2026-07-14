@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import BaseModal from './BaseModal';
-import { apiGet, apiPost } from '../../utils/api';
-import type { FirewallItem } from '../../types';
+import { apiPost } from '../../utils/api';
+import { useFirewallStore } from '../../stores/firewallStore';
 
 interface Props {
   open: boolean;
@@ -9,7 +9,8 @@ interface Props {
 }
 
 export default function FirewallModal({ open, onClose }: Props) {
-  const [items, setItems] = useState<FirewallItem[]>([]);
+  const items = useFirewallStore((s) => s.items);
+  const refresh = useFirewallStore((s) => s.refresh);
   const [newIp, setNewIp] = useState('');
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
@@ -25,13 +26,8 @@ export default function FirewallModal({ open, onClose }: Props) {
 
   useEffect(() => {
     if (!open) return;
-    refresh();
-  }, [open]);
-
-  async function refresh() {
-    const res = await apiGet<{ data: FirewallItem[] }>('/api/firewall');
-    setItems(res.data);
-  }
+    void refresh();
+  }, [open, refresh]);
 
   async function handleAdd() {
     const ip = newIp.trim();
@@ -43,7 +39,7 @@ export default function FirewallModal({ open, onClose }: Props) {
       setMsg(res.msg);
       if (res.status === 'success') {
         setNewIp('');
-        refresh();
+        void refresh();
       }
     } catch {
       setMsg('网络错误');
@@ -55,11 +51,11 @@ export default function FirewallModal({ open, onClose }: Props) {
   async function handleRemove(ip: string) {
     const res = await apiPost<{ status: string; msg: string }>('/api/firewall/remove', { ip });
     setMsg(res.msg);
-    refresh();
+    void refresh();
   }
 
   return (
-    <BaseModal open={open} onClose={onClose} title="IP 防火墙" width="max-w-xl">
+    <BaseModal open={open} onClose={onClose} title={`IP 防火墙 · 当前封禁 (${items.length})`} width="max-w-5xl">
       {/* 添加 */}
       <div className="flex gap-2 mb-4">
         <input
@@ -86,7 +82,7 @@ export default function FirewallModal({ open, onClose }: Props) {
         <input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="搜索已拦截 IP 或地理位置…"
+          placeholder="搜索已封禁 IP 或地理位置…"
           className="bg-transparent outline-none flex-1 text-xs text-gray-200 placeholder:text-gray-600"
         />
         <span className="text-[10px] text-gray-600 whitespace-nowrap">
@@ -98,7 +94,7 @@ export default function FirewallModal({ open, onClose }: Props) {
       </div>
 
       {/* 列表 */}
-      <div className="max-h-[400px] overflow-y-auto space-y-1">
+      <div className="max-h-[68vh] overflow-y-auto space-y-1">
         {filteredItems.length === 0 && (
           <div className="text-center text-gray-600 text-xs py-6">
             {items.length === 0 ? '无封禁 IP' : '没有匹配的 IP'}

@@ -47,7 +47,6 @@ func (h *APIHandler) GetSettings(c *gin.Context) {
 			"firewall_mode":    data.FirewallMode,
 			"auto_ban":         data.AutoBan,
 			"cesium_ion_token": data.CesiumIonToken,
-			"frp_log_path":     data.FRPLogPath,
 		},
 	})
 }
@@ -87,7 +86,6 @@ func (h *APIHandler) UpdateSettings(c *gin.Context) {
 		FirewallMode   *string                `json:"firewall_mode"`
 		AutoBan        *config.AutoBan        `json:"auto_ban"`
 		CesiumIonToken *string                `json:"cesium_ion_token"`
-		FRPLogPath     *string                `json:"frp_log_path"`
 		ChangePwd      bool                   `json:"change_pwd"`
 		OldPassword    string                 `json:"old_password"`
 		NewPassword    string                 `json:"new_password"`
@@ -151,9 +149,6 @@ func (h *APIHandler) UpdateSettings(c *gin.Context) {
 		if req.CesiumIonToken != nil {
 			d.CesiumIonToken = *req.CesiumIonToken
 		}
-		if req.FRPLogPath != nil {
-			d.FRPLogPath = strings.TrimSpace(*req.FRPLogPath)
-		}
 	}); err != nil {
 		c.JSON(500, gin.H{"status": "error", "msg": "设置保存失败: " + err.Error()})
 		return
@@ -182,29 +177,6 @@ func (h *APIHandler) UpdateSettings(c *gin.Context) {
 	}
 
 	c.JSON(200, gin.H{"status": "success", "msg": "设置保存成功！"})
-}
-
-// GetFRPLog GET /api/frp-log
-// 只读取配置文件尾部并筛选关键事件，避免轮询时扫描完整日志。
-func (h *APIHandler) GetFRPLog(c *gin.Context) {
-	path := h.cfg.Get().FRPLogPath
-	if path == "" {
-		c.JSON(200, gin.H{"status": "success", "enabled": false, "data": []services.FRPLogEntry{}})
-		return
-	}
-	limit, err := strconv.Atoi(c.DefaultQuery("limit", "80"))
-	if err != nil || limit < 1 {
-		limit = 80
-	}
-	if limit > 200 {
-		limit = 200
-	}
-	entries, err := services.ReadFRPLog(path, limit)
-	if err != nil {
-		c.JSON(200, gin.H{"status": "error", "enabled": true, "msg": err.Error(), "data": []services.FRPLogEntry{}})
-		return
-	}
-	c.JSON(200, gin.H{"status": "success", "enabled": true, "data": entries})
 }
 
 // ── Data ────────────────────────────────────────────────

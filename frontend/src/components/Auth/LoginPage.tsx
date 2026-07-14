@@ -8,6 +8,7 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [success, setSuccess] = useState(false);
 
   const setAuth = useAuthStore((s) => s.setAuth);
   const setConfig = useSettingsStore((s) => s.setConfig);
@@ -20,8 +21,15 @@ export default function LoginPage() {
       const res = await login(username, password);
       if (res.status === 'success') {
         const authRes = await checkAuth();
+        if (!authRes.authenticated || !authRes.config) {
+          setError('登录状态确认失败，请重试');
+          return;
+        }
+        // 主界面先取得完整配置，再切换认证状态，避免短暂显示“配置加载中”。
+        setConfig(authRes.config);
+        setSuccess(true);
+        await new Promise((resolve) => window.setTimeout(resolve, 650));
         setAuth(true);
-        if (authRes.config) setConfig(authRes.config);
       } else {
         setError(res.msg || '登录失败');
       }
@@ -33,14 +41,31 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex items-center justify-center h-screen bg-gray-950">
+    <div className={`login-page ${success ? 'login-page-success' : ''}`}>
+      <div className="login-stars" aria-hidden="true" />
+      <div className="login-globe-stage" aria-hidden="true">
+        <div className="login-orbit login-orbit-a"><i /></div>
+        <div className="login-orbit login-orbit-b"><i /></div>
+        <div className="login-globe">
+          <div className="login-globe-grid" />
+          <div className="login-globe-lights" />
+        </div>
+        <div className="login-globe-shadow" />
+      </div>
+
       <form
         onSubmit={handleSubmit}
-        className="w-[min(20rem,calc(100vw-2rem))] p-5 sm:p-6 bg-gray-900 rounded-xl border border-gray-800 shadow-2xl"
+        className="login-card w-[min(23rem,calc(100vw-2rem))] p-6 sm:p-7"
       >
-        <h1 className="text-xl font-bold text-center text-brand-400 mb-6">
-          FRP_PV 态势感知
-        </h1>
+        <div className="mb-6 flex flex-col items-center">
+          <img
+            src="/img/frppvlogo.png"
+            alt="FRP_PV"
+            className="h-20 w-20 rounded-2xl border border-brand-300/30 object-cover shadow-[0_0_35px_rgba(0,212,255,.28)]"
+          />
+          <h1 className="mt-4 text-xl font-bold tracking-wide text-gray-100">FRP_PV 态势感知</h1>
+          <p className="mt-1 text-[11px] tracking-[0.22em] text-brand-300/70">GLOBAL ACTIVE DEFENSE</p>
+        </div>
 
         {error && (
           <p className="text-red-400 text-sm mb-4 text-center">{error}</p>
@@ -51,8 +76,9 @@ export default function LoginPage() {
           type="text"
           value={username}
           onChange={(e) => setUsername(e.target.value)}
-          className="w-full mb-4 px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg
-                     text-sm text-gray-200 focus:outline-none focus:border-brand-500"
+          className="login-input"
+          placeholder="请输入管理员用户名"
+          autoComplete="username"
           autoFocus
         />
 
@@ -61,18 +87,23 @@ export default function LoginPage() {
           type="password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          className="w-full mb-6 px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg
-                     text-sm text-gray-200 focus:outline-none focus:border-brand-500"
+          className="login-input mb-6"
+          placeholder="请输入密码"
+          autoComplete="current-password"
         />
 
         <button
           type="submit"
-          disabled={loading}
-          className="w-full py-2 bg-brand-600 hover:bg-brand-500 disabled:opacity-50
-                     rounded-lg text-sm font-medium transition-colors"
+          disabled={loading || success}
+          className="login-submit"
         >
-          {loading ? '登录中…' : '登录'}
+          {success ? '验证成功 · 正在进入系统' : loading ? '正在验证…' : '安全登录'}
         </button>
+
+        <div className="mt-5 flex items-center justify-center gap-2 text-[10px] text-gray-600">
+          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_#34d399]" />
+          加密会话 · 主动防御控制台
+        </div>
       </form>
     </div>
   );

@@ -20,8 +20,8 @@ export default function IpListModal({ open, onClose }: Props) {
   );
 
   return (
-    <BaseModal open={open} onClose={onClose} title={`IP 列表 (${sorted.length})`} width="max-w-xl">
-      <div className="max-h-[500px] overflow-y-auto">
+    <BaseModal open={open} onClose={onClose} title={`IP 列表 (${sorted.length})`} width="max-w-5xl">
+      <div className="max-h-[68vh] overflow-y-auto">
         <table className="w-full text-xs">
           <thead className="text-gray-500 sticky top-0 bg-gray-900">
             <tr>
@@ -37,7 +37,7 @@ export default function IpListModal({ open, onClose }: Props) {
               <tr key={i} className="border-t border-gray-800/50 hover:bg-gray-800/30">
                 <td className="py-1.5 px-2 font-mono text-gray-300">{r.ip}</td>
                 <td className="py-1.5 px-2 text-gray-400">{r.module}</td>
-                <td className="py-1.5 px-2 text-gray-500 max-w-[200px] truncate">
+                <td className="py-1.5 px-2 text-gray-500 max-w-[420px]">
                   {getDesc(r, addressFields)}
                 </td>
                 <td className="py-1.5 px-2 text-right text-brand-400 tabular-nums">{r.count}</td>

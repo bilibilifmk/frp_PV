@@ -15,8 +15,8 @@ export default function BaseModal({ open, onClose, title, children, width = 'max
   return (
     <div className="modal-backdrop" onMouseDown={onClose}>
       <div
-        className={`bg-gray-900 border border-gray-700 rounded-xl shadow-2xl w-full ${width} mx-4
-                     max-h-[85vh] flex flex-col`}
+        className={`bg-gray-900 border border-gray-700 rounded-xl shadow-2xl w-full ${width} mx-3 sm:mx-4
+                     max-h-[92vh] flex flex-col`}
         onMouseDown={(e) => e.stopPropagation()}
       >
         {/* 标题栏 */}

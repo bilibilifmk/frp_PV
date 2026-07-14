@@ -6,6 +6,10 @@ import { useAddressFields } from '../../hooks/useAddressFields';
 import { getDesc } from '../../utils/formatDesc';
 import type { ConnectionRecord, DemoConnectionEvent, ImageryType } from '../../types';
 
+const CESIUM_FONT_FAMILY = '"Smiley Sans Web", "得意黑", "PingFang SC", "Microsoft YaHei UI", sans-serif';
+const CESIUM_LABEL_FONT = `500 14px ${CESIUM_FONT_FAMILY}`;
+const CESIUM_EMPHASIS_FONT = `600 16px ${CESIUM_FONT_FAMILY}`;
+
 // ═══════════════════════════════════════════════════════
 //  FlyingLine — 自定义 Cesium Fabric 飞线材质 (GLSL)
 //  活跃连接专用: 流光拖尾动画, 头亮尾暗
@@ -106,6 +110,7 @@ export default function CesiumGlobe({ serverLat, serverLng, imageryOverride, hid
   const demoCleanupsRef = useRef<Array<() => void>>([]);
   const demoTimersRef = useRef<Array<ReturnType<typeof setTimeout>>>([]);
   const lastDemoActivityRef = useRef(Date.now());
+  const idleCameraActiveRef = useRef(false);
   const [popup, setPopup] = useState<PointPopup | null>(null);
   const [demoBusy, setDemoBusy] = useState(false);
 
@@ -114,6 +119,7 @@ export default function CesiumGlobe({ serverLat, serverLng, imageryOverride, hid
   const activeBannedIps = useConnectionStore((s) => s.activeBannedIps);
   const demoMode = useConnectionStore((s) => s.demoMode);
   const demoQueue = useConnectionStore((s) => s.demoQueue);
+  const connectionOpenSequence = useConnectionStore((s) => s.connectionOpenSequence);
   const shiftDemoEvent = useConnectionStore((s) => s.shiftDemoEvent);
   const config = useSettingsStore((s) => s.config);
 
@@ -138,6 +144,8 @@ export default function CesiumGlobe({ serverLat, serverLng, imageryOverride, hid
 
     let viewer: Cesium.Viewer;
     let handler: Cesium.ScreenSpaceEventHandler | null = null;
+    let syncResolution: (() => void) | null = null;
+    let resolutionTimer = 0;
     try {
     viewer = new Cesium.Viewer(containerRef.current, {
       baseLayerPicker: false,
@@ -151,9 +159,47 @@ export default function CesiumGlobe({ serverLat, serverLng, imageryOverride, hid
       fullscreenButton: false,
       navigationHelpButton: false,
       infoBox: false,
+      useBrowserRecommendedResolution: false,
+      contextOptions: {
+        webgl: {
+          alpha: true,
+          antialias: true,
+          preserveDrawingBuffer: false,
+        },
+      },
       requestRenderMode: true,
       maximumRenderTimeChange: Infinity,
     });
+
+    // 根据窗口面积分配像素预算，避免高分屏同时渲染过多像素导致掉帧。
+    const applyResolution = () => {
+      if (viewer.isDestroyed()) return;
+      const deviceRatio = Math.max(1, window.devicePixelRatio || 1);
+      const width = Math.max(1, containerRef.current?.clientWidth || window.innerWidth);
+      const height = Math.max(1, containerRef.current?.clientHeight || window.innerHeight);
+      const cssPixels = width * height;
+      const budgetRatio = cssPixels <= 1_200_000 ? 2 : cssPixels <= 2_200_000 ? 1.5 : 1;
+      const effectiveRatio = Math.min(deviceRatio, budgetRatio);
+      viewer.resolutionScale = effectiveRatio / deviceRatio;
+      viewer.resize();
+      viewer.scene.requestRender();
+    };
+    syncResolution = () => {
+      window.clearTimeout(resolutionTimer);
+      resolutionTimer = window.setTimeout(applyResolution, 120);
+    };
+    applyResolution();
+    window.addEventListener('resize', syncResolution);
+
+    // WebGL2 使用多重采样保持线段边缘清晰；WebGL1 才回退到 FXAA。
+    const multisampling = viewer.scene.msaaSupported;
+    if (multisampling) {
+      viewer.scene.msaaSamples = 2;
+    }
+    viewer.scene.postProcessStages.fxaa.enabled = !multisampling;
+    viewer.scene.globe.maximumScreenSpaceError = 1.25;
+    // 标签避让依赖此事件；1% 的相机变化足够及时，又不会每帧触发计算。
+    viewer.camera.percentageChanged = 0.002;
 
     // 暗色底图
     viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#0a0a1a');
@@ -184,14 +230,13 @@ export default function CesiumGlobe({ serverLat, serverLng, imageryOverride, hid
       },
       label: {
         text: '服务器',
-        font: 'bold 14px sans-serif',
+        font: CESIUM_EMPHASIS_FONT,
         fillColor: Cesium.Color.WHITE,
         style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-        outlineWidth: 4,
+        outlineWidth: 2,
         outlineColor: Cesium.Color.BLACK,
         verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
         pixelOffset: new Cesium.Cartesian2(0, -14),
-        scaleByDistance: new Cesium.NearFarScalar(5e5, 1.0, 2e7, 0.7),
       },
     });
 
@@ -232,6 +277,8 @@ export default function CesiumGlobe({ serverLat, serverLng, imageryOverride, hid
       demoCleanupsRef.current = [];
       demoTimersRef.current.forEach(clearTimeout);
       demoTimersRef.current = [];
+      if (syncResolution) window.removeEventListener('resize', syncResolution);
+      window.clearTimeout(resolutionTimer);
       handler?.destroy();
       viewerRef.current?.destroy();
       viewerRef.current = null;
@@ -473,15 +520,6 @@ export default function CesiumGlobe({ serverLat, serverLng, imageryOverride, hid
     // 本轮所有期望存在的 entity ID
     const wantIds = new Set<string>(['__server__']);
 
-    // 自适应线宽: 对数缩放, 近看稍粗远看稍细 (约 0.5 ~ 1.2)
-    const makeAdaptiveWidth = (base: number) =>
-      new Cesium.CallbackProperty(() => {
-        const alt = viewer.camera.positionCartographic?.height ?? 2e7;
-        const logAlt = Math.log10(Math.max(alt, 1e5));
-        const scale = Math.min(1.2, Math.max(0.5, 1.2 - (logAlt - 5) * 0.25));
-        return base * scale;
-      }, false);
-
     // ── 1. 按坐标分组: 同一位置多 IP 合并为一个点 ──
     interface LocGroup {
       lon: number; lat: number;
@@ -599,6 +637,7 @@ export default function CesiumGlobe({ serverLat, serverLng, imageryOverride, hid
     // ── 3. 渲染每个坐标组 ──
     for (const [ck, g] of groups) {
       const arcId = `arc_${ck}`;
+      const arcGlowId = `${arcId}_glow`;
       const ptId = `pt_${ck}`;
       const drawArc = shouldDrawArc.has(ck);
       if (drawArc) wantIds.add(arcId);
@@ -609,6 +648,8 @@ export default function CesiumGlobe({ serverLat, serverLng, imageryOverride, hid
       const isActive = g.hasActive;
       const newState = (isBanned ? 'blocked' : isActive ? 'active' : 'historical')
         + (isForeign ? '_foreign' : '');
+      const needsGlow = isActive && !isBanned;
+      if (drawArc && needsGlow) wantIds.add(arcGlowId);
 
       if (drawArc && isBanned) {
         for (let i = 0; i < 3; i++) wantIds.add(`arcx_${arcId}_${i}`);
@@ -617,28 +658,30 @@ export default function CesiumGlobe({ serverLat, serverLng, imageryOverride, hid
       // ── 弧线 (仅聚类代表者) ──
       if (drawArc) {
         const existingArc = viewer.entities.getById(arcId) as any;
-        if (existingArc && existingArc._ipState === newState) {
+        const existingGlow = viewer.entities.getById(arcGlowId);
+        if (existingArc && existingArc._ipState === newState && (!needsGlow || existingGlow)) {
           // 不变
         } else {
-          if (existingArc) {
-            viewer.entities.remove(existingArc);
-            for (let i = 0; i < 3; i++) {
-              const x = viewer.entities.getById(`arcx_${arcId}_${i}`);
-              if (x) viewer.entities.remove(x);
-            }
+          if (existingArc) viewer.entities.remove(existingArc);
+          if (existingGlow) viewer.entities.remove(existingGlow);
+          for (let i = 0; i < 3; i++) {
+            const x = viewer.entities.getById(`arcx_${arcId}_${i}`);
+            if (x) viewer.entities.remove(x);
           }
 
           const positions = computeArc(g.lon, g.lat, serverLng, serverLat);
 
           let material: any;
           let lineWidth: any;
+          let glowColor: Cesium.Color | null = null;
+          let glowWidth: any;
           if (isBanned) {
             material = new Cesium.PolylineDashMaterialProperty({
               color: Cesium.Color.RED.withAlpha(0.8),
               dashLength: 40,
               gapColor: Cesium.Color.TRANSPARENT,
             });
-            lineWidth = makeAdaptiveWidth(2);
+            lineWidth = 2.5;
             if (xMarkerCanvas) {
               [0.25, 0.5, 0.75].forEach((frac, i) => {
                 const idx = Math.max(0, Math.min(positions.length - 1, Math.floor(frac * (positions.length - 1))));
@@ -659,13 +702,32 @@ export default function CesiumGlobe({ serverLat, serverLng, imageryOverride, hid
               ? Cesium.Color.ORANGE
               : Cesium.Color.fromCssColorString('#00ff88');
             material = new FlyingLineMaterialProperty(lineColor, 800 + Math.random() * 500) as any;
-            lineWidth = makeAdaptiveWidth(2.5);
+            lineWidth = 3;
+            glowColor = lineColor.withAlpha(0.42);
+            glowWidth = 6;
           } else {
             const lineColor = isForeign
               ? Cesium.Color.ORANGE.withAlpha(0.65)
               : Cesium.Color.fromCssColorString('#00d4ff').withAlpha(0.65);
             material = new Cesium.ColorMaterialProperty(lineColor);
-            lineWidth = makeAdaptiveWidth(1.5);
+            lineWidth = 2;
+          }
+
+          // 外层只承担柔和辉光，内层始终保留高对比实线核心。
+          if (glowColor) {
+            viewer.entities.add({
+              id: arcGlowId,
+              polyline: {
+                positions,
+                width: glowWidth,
+                material: new Cesium.PolylineGlowMaterialProperty({
+                  color: glowColor,
+                  glowPower: 0.18,
+                  taperPower: 0.8,
+                }),
+                clampToGround: false,
+              },
+            });
           }
 
           const ent = viewer.entities.add({
@@ -714,20 +776,21 @@ export default function CesiumGlobe({ serverLat, serverLng, imageryOverride, hid
             scaleByDistance: new Cesium.NearFarScalar(1e6, 1.0, 2e7, 0.3),
           },
           label: {
+            // 首帧先隐藏，80ms 内完成避让后只显示互不重叠的标签。
+            show: false,
             text: finalLabel,
-            font: 'bold 12px sans-serif',
+            font: CESIUM_LABEL_FONT,
             fillColor: lColor,
             style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-            outlineWidth: 3,
+            outlineWidth: 1,
             outlineColor: Cesium.Color.BLACK,
             verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
             pixelOffset: new Cesium.Cartesian2(0, -12),
-            scaleByDistance: new Cesium.NearFarScalar(1e6, 1.0, 2e7, 0.5),
-            translucencyByDistance: new Cesium.NearFarScalar(1e6, 1.0, 5e7, 0.2),
             distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 4e7),
           },
         });
         (ptEnt as any)._ipState = ptState;
+        (ptEnt as any)._labelPriority = isBanned ? 3 : isActive ? 2 : 1;
       }
     }
 
@@ -737,6 +800,18 @@ export default function CesiumGlobe({ serverLat, serverLng, imageryOverride, hid
       gMap.set(ck, { locs: [...g.locs], bestDesc: g.bestDesc });
     }
     groupsRef.current = gMap;
+
+    // 相机移动时低频执行屏幕空间标签避让；不使用逐标签 CallbackProperty。
+    let declutterTimer = 0;
+    const scheduleDeclutter = () => {
+      if (declutterTimer) return;
+      declutterTimer = window.setTimeout(() => {
+        declutterTimer = 0;
+        declutterPointLabels(viewer);
+      }, 60);
+    };
+    const removeCameraChanged = viewer.camera.changed.addEventListener(scheduleDeclutter);
+    scheduleDeclutter();
 
     // 清理不在 wantIds 中的旧实体
     const toRemove = viewer.entities.values.filter(
@@ -760,6 +835,7 @@ export default function CesiumGlobe({ serverLat, serverLng, imageryOverride, hid
     if (hasActive) {
       const tick = () => {
         if (viewerRef.current && !viewerRef.current.isDestroyed()) {
+          // requestAnimationFrame 自动跟随显示器刷新率和浏览器调度，不设置固定帧率上限。
           viewerRef.current.scene.requestRender();
           animFrameId = requestAnimationFrame(tick);
         }
@@ -768,20 +844,20 @@ export default function CesiumGlobe({ serverLat, serverLng, imageryOverride, hid
     }
     return () => {
       clearTimeout(retryTimer);
+      window.clearTimeout(declutterTimer);
+      removeCameraChanged();
       if (animFrameId) cancelAnimationFrame(animFrameId);
     };
   }, [allIpData, activeConnections, activeBannedIps, foreignHighlight, homeCountry, addressFields, serverLat, serverLng, arcDedupKm, ptClusterM, minArcDistM]);
 
-  // 关闭演示模式时立即停止镜头、清空临时高亮。
+  // 关闭演示模式只停止镜头控制；Viewer、底图和浏览器瓦片缓存全部保留。
+  // 已完成的演示线继续由原定计时器自然清理，避免切换时画面突然被清空。
   useEffect(() => {
     if (demoMode) return;
+    idleCameraActiveRef.current = false;
     demoGenerationRef.current++;
     const viewer = viewerRef.current;
     if (viewer && !viewer.isDestroyed()) viewer.camera.cancelFlight();
-    demoCleanupsRef.current.forEach((cleanup) => cleanup());
-    demoCleanupsRef.current = [];
-    demoTimersRef.current.forEach(clearTimeout);
-    demoTimersRef.current = [];
     setDemoBusy(false);
   }, [demoMode]);
 
@@ -790,6 +866,19 @@ export default function CesiumGlobe({ serverLat, serverLng, imageryOverride, hid
     demoGenerationRef.current++;
     setDemoBusy(false);
   }, [serverLat, serverLng]);
+
+  // 任意新连接都视为活动；即使暂时没有地理坐标，也要立即结束空闲旋转。
+  useEffect(() => {
+    if (!demoMode) return;
+    lastDemoActivityRef.current = Date.now();
+
+    // 只取消空闲全景的飞行，避免影响正在播放的连接演示。
+    if (idleCameraActiveRef.current) {
+      idleCameraActiveRef.current = false;
+      const viewer = viewerRef.current;
+      if (viewer && !viewer.isDestroyed()) viewer.camera.cancelFlight();
+    }
+  }, [demoMode, connectionOpenSequence]);
 
   // 串行消费演示事件；队列积压时缩短镜头时间，但绝不并行控制相机。
   useEffect(() => {
@@ -800,6 +889,7 @@ export default function CesiumGlobe({ serverLat, serverLng, imageryOverride, hid
     const event = demoQueue[0];
     const fast = demoQueue.length > 5;
     const generation = ++demoGenerationRef.current;
+    idleCameraActiveRef.current = false;
     lastDemoActivityRef.current = Date.now();
     shiftDemoEvent(event.id);
     setDemoBusy(true);
@@ -811,6 +901,7 @@ export default function CesiumGlobe({ serverLat, serverLng, imageryOverride, hid
         const timer = setTimeout(() => {
           cleanup();
           demoCleanupsRef.current = demoCleanupsRef.current.filter((item) => item !== cleanup);
+          demoTimersRef.current = demoTimersRef.current.filter((item) => item !== timer);
         }, fast ? 4_500 : 6_500);
         demoTimersRef.current.push(timer);
       })
@@ -819,7 +910,7 @@ export default function CesiumGlobe({ serverLat, serverLng, imageryOverride, hid
       });
   }, [demoMode, demoBusy, demoQueue, shiftDemoEvent, serverLat, serverLng]);
 
-  // 演示模式长时间无新连接时回到全景并缓慢自转；新事件会通过依赖变化立即清理。
+  // 演示模式 30 秒无连接活动时回到全景并持续自转，直到下一次连接活动。
   useEffect(() => {
     if (!demoMode || demoBusy || demoQueue.length > 0) return;
     const viewer = viewerRef.current;
@@ -830,11 +921,12 @@ export default function CesiumGlobe({ serverLat, serverLng, imageryOverride, hid
     const idleFor = Date.now() - lastDemoActivityRef.current;
     const idleTimer = setTimeout(() => {
       if (cancelled || viewer.isDestroyed()) return;
+      idleCameraActiveRef.current = true;
       void flyCameraToOverview(viewer.camera, serverLat, serverLng, 2.8).then(() => {
-        if (cancelled || viewer.isDestroyed()) return;
+        if (cancelled || !idleCameraActiveRef.current || viewer.isDestroyed()) return;
         let previous = performance.now();
         const spin = (now: number) => {
-          if (cancelled || viewer.isDestroyed()) return;
+          if (cancelled || !idleCameraActiveRef.current || viewer.isDestroyed()) return;
           const elapsed = Math.min(50, now - previous);
           previous = now;
           viewer.camera.rotate(Cesium.Cartesian3.UNIT_Z, -0.000012 * elapsed);
@@ -849,9 +941,10 @@ export default function CesiumGlobe({ serverLat, serverLng, imageryOverride, hid
       cancelled = true;
       clearTimeout(idleTimer);
       if (spinFrame) cancelAnimationFrame(spinFrame);
-      if (!viewer.isDestroyed()) viewer.camera.cancelFlight();
+      // 新连接的 playDemoTour 会主动停止旧的全景飞行；这里不能 cancelFlight，
+      // 否则 React effect 清理顺序可能误伤刚启动的连接聚焦动画。
     };
-  }, [demoMode, demoBusy, demoQueue.length, serverLat, serverLng]);
+  }, [demoMode, demoBusy, demoQueue.length, connectionOpenSequence, serverLat, serverLng]);
 
   return (
     <div className="absolute inset-0 w-full h-full">
@@ -886,11 +979,6 @@ async function playDemoTour(
   const surfaceDistance = geodesic.surfaceDistance;
   // 短距离连接无需抢占镜头；远距离才执行“聚焦来源 → 沿线滚动”的完整演示。
   const followCamera = surfaceDistance >= 800_000;
-  const cleanupSource = drawDemoSource(viewer, event);
-  const abort = () => {
-    cleanupSource();
-    return null;
-  };
 
   try {
     if (followCamera) {
@@ -903,11 +991,11 @@ async function playDemoTour(
         Cesium.Math.toRadians(28),
         Cesium.Math.toRadians(-68),
       );
-      if (!isCurrent() || viewer.isDestroyed()) return abort();
+      if (!isCurrent() || viewer.isDestroyed()) return null;
 
       // 完成来源地聚焦后才开始画线，避免镜头与路径同时突然出现。
       await wait(fast ? 220 : 380);
-      if (!isCurrent() || viewer.isDestroyed()) return abort();
+      if (!isCurrent() || viewer.isDestroyed()) return null;
     }
 
     // 绘线路径的同时让镜头沿弧线移动、旋转并逐渐拉远。
@@ -924,14 +1012,10 @@ async function playDemoTour(
     await animation.finished;
     if (!isCurrent() || viewer.isDestroyed()) {
       animation.cleanup();
-      return abort();
+      return null;
     }
-    return () => {
-      animation.cleanup();
-      cleanupSource();
-    };
+    return animation.cleanup;
   } catch (error) {
-    cleanupSource();
     throw error;
   }
 }
@@ -995,40 +1079,6 @@ function wait(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
-function drawDemoSource(viewer: Cesium.Viewer, event: DemoConnectionEvent) {
-  const sourceId = `__demo_source_${event.id}`;
-  viewer.entities.add({
-    id: sourceId,
-    position: Cesium.Cartesian3.fromDegrees(event.lon, event.lat),
-    point: {
-      pixelSize: 14,
-      color: Cesium.Color.fromCssColorString('#00ffd5'),
-      outlineColor: Cesium.Color.fromCssColorString('#bafff2').withAlpha(0.55),
-      outlineWidth: 10,
-      disableDepthTestDistance: Number.POSITIVE_INFINITY,
-    },
-    label: {
-      text: event.module ? `${event.ip} · ${event.module}` : event.ip,
-      font: 'bold 12px sans-serif',
-      fillColor: Cesium.Color.WHITE,
-      outlineColor: Cesium.Color.BLACK,
-      outlineWidth: 3,
-      style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-      verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-      pixelOffset: new Cesium.Cartesian2(0, -19),
-      disableDepthTestDistance: Number.POSITIVE_INFINITY,
-    },
-  });
-  viewer.scene.requestRender();
-
-  return () => {
-    if (viewer.isDestroyed()) return;
-    const entity = viewer.entities.getById(sourceId);
-    if (entity) viewer.entities.remove(entity);
-    viewer.scene.requestRender();
-  };
-}
-
 function drawDemoConnection(
   viewer: Cesium.Viewer,
   event: DemoConnectionEvent,
@@ -1040,7 +1090,7 @@ function drawDemoConnection(
   isCurrent: () => boolean,
 ) {
   const lineId = `__demo_line_${event.id}`;
-  const hitId = `__demo_hit_${event.id}`;
+  const glowId = `__demo_glow_${event.id}`;
   const positions = computeArc(event.lon, event.lat, serverLng, serverLat, 180);
   const cameraGeodesic = new Cesium.EllipsoidGeodesic(
     Cesium.Cartographic.fromDegrees(event.lon, event.lat),
@@ -1074,30 +1124,25 @@ function drawDemoConnection(
   }, false);
 
   viewer.entities.add({
-    id: lineId,
+    id: glowId,
     polyline: {
       positions: animatedPositions,
-      width: 4,
+      width: 7,
       material: new Cesium.PolylineGlowMaterialProperty({
-        color: Cesium.Color.fromCssColorString('#00ffd5'),
-        glowPower: 0.28,
-        taperPower: 0.75,
+        color: Cesium.Color.fromCssColorString('#00ffd5').withAlpha(0.5),
+        glowPower: 0.2,
+        taperPower: 0.8,
       }),
     },
   });
   viewer.entities.add({
-    id: hitId,
-    position: Cesium.Cartesian3.fromDegrees(serverLng, serverLat),
-    point: {
-      show: new Cesium.CallbackProperty(() => progress > 0.9, false),
-      pixelSize: 16,
-      color: Cesium.Color.WHITE.withAlpha(0.9),
-      outlineColor: Cesium.Color.fromCssColorString('#00ff9d').withAlpha(0.55),
-      outlineWidth: 12,
-      disableDepthTestDistance: Number.POSITIVE_INFINITY,
+    id: lineId,
+    polyline: {
+      positions: animatedPositions,
+      width: 2.5,
+      material: new Cesium.ColorMaterialProperty(Cesium.Color.fromCssColorString('#bafff2')),
     },
   });
-
   const tick = (now: number) => {
     if (viewer.isDestroyed() || !isCurrent()) {
       finish();
@@ -1144,7 +1189,7 @@ function drawDemoConnection(
     if (frameId) cancelAnimationFrame(frameId);
     finish();
     if (viewer.isDestroyed()) return;
-    for (const id of [lineId, hitId]) {
+    for (const id of [lineId, glowId]) {
       const entity = viewer.entities.getById(id);
       if (entity) viewer.entities.remove(entity);
     }
@@ -1152,6 +1197,133 @@ function drawDemoConnection(
   };
 
   return { cleanup, finished: finishedPromise };
+}
+
+interface LabelBox {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+let labelMeasureContext: CanvasRenderingContext2D | null | undefined;
+
+/**
+ * 普通地点标签的屏幕空间避让。
+ * 只在相机明显变化后执行，保留地图点和线路，不参与每帧渲染。
+ */
+function declutterPointLabels(viewer: Cesium.Viewer) {
+  if (viewer.isDestroyed()) return;
+  const canvas = viewer.scene.canvas;
+  const width = canvas.clientWidth;
+  const height = canvas.clientHeight;
+  if (width <= 0 || height <= 0) return;
+
+  const time = viewer.clock.currentTime;
+  const altitude = viewer.camera.positionCartographic.height;
+  const areaScale = Math.min(1.5, Math.max(0.65, (width * height) / (1920 * 1080)));
+  const baseLimit = altitude > 12_000_000 ? 18
+    : altitude > 6_000_000 ? 26
+    : altitude > 2_000_000 ? 38
+    : altitude > 700_000 ? 52
+    : 72;
+  const labelLimit = Math.max(12, Math.round(baseLimit * areaScale));
+  const occupied: LabelBox[] = [];
+
+  // 服务器标签始终显示，普通标签需要避开该区域。
+  for (const entity of viewer.entities.values) {
+    if (entity.id !== '__server__') continue;
+    const box = getEntityLabelBox(viewer, entity, time);
+    if (box) occupied.push(box);
+  }
+
+  const candidates = viewer.entities.values
+    .filter((entity) => entity.id.startsWith('pt_') && entity.label && entity.position)
+    .sort((a, b) => ((b as any)._labelPriority ?? 1) - ((a as any)._labelPriority ?? 1));
+
+  let visibleCount = 0;
+  let changed = false;
+  for (const entity of candidates) {
+    const position = entity.position?.getValue(time);
+    let visible = false;
+    if (position && visibleCount < labelLimit && isPointAboveHorizon(position, viewer.camera.positionWC)) {
+      const box = getEntityLabelBox(viewer, entity, time);
+      if (box && box.right >= 0 && box.left <= width && box.bottom >= 0 && box.top <= height) {
+        visible = !occupied.some((other) => boxesOverlap(box, other, 8));
+        if (visible) {
+          occupied.push(box);
+          visibleCount++;
+        }
+      }
+    }
+
+    if ((entity as any)._labelVisible !== visible) {
+      (entity as any)._labelVisible = visible;
+      entity.label!.show = new Cesium.ConstantProperty(visible);
+      changed = true;
+    }
+  }
+  if (changed) viewer.scene.requestRender();
+}
+
+function getEntityLabelBox(
+  viewer: Cesium.Viewer,
+  entity: Cesium.Entity,
+  time: Cesium.JulianDate,
+): LabelBox | null {
+  const position = entity.position?.getValue(time);
+  const text = entity.label?.text?.getValue(time);
+  if (!position || !text) return null;
+  if (!isPointAboveHorizon(position, viewer.camera.positionWC)) return null;
+  const screen = Cesium.SceneTransforms.worldToWindowCoordinates(viewer.scene, position);
+  if (!screen) return null;
+  const font = String(entity.label?.font?.getValue(time) || CESIUM_LABEL_FONT);
+  const dimensions = measureLabel(String(text), font);
+  const pixelOffset = entity.label?.pixelOffset?.getValue(time) ?? Cesium.Cartesian2.ZERO;
+  const outline = Number(entity.label?.outlineWidth?.getValue(time) ?? 0);
+  const textWidth = dimensions.width + outline * 2 + 6;
+  const labelHeight = dimensions.height + outline * 2 + 4;
+  const centerX = screen.x + pixelOffset.x;
+  const bottom = screen.y + pixelOffset.y;
+  return {
+    left: centerX - textWidth / 2,
+    right: centerX + textWidth / 2,
+    top: bottom - labelHeight,
+    bottom,
+  };
+}
+
+function measureLabel(text: string, font: string) {
+  if (labelMeasureContext === undefined) {
+    labelMeasureContext = document.createElement('canvas').getContext('2d');
+  }
+  if (!labelMeasureContext) {
+    let width = 0;
+    for (const char of text) width += char.charCodeAt(0) > 255 ? 14 : 8;
+    return { width, height: 18 };
+  }
+  labelMeasureContext.font = font;
+  const metrics = labelMeasureContext.measureText(text);
+  const height = metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent;
+  return { width: metrics.width, height: Math.max(16, height || 0) };
+}
+
+function boxesOverlap(a: LabelBox, b: LabelBox, gap: number) {
+  return !(
+    a.right + gap < b.left ||
+    a.left - gap > b.right ||
+    a.bottom + gap < b.top ||
+    a.top - gap > b.bottom
+  );
+}
+
+function isPointAboveHorizon(point: Cesium.Cartesian3, camera: Cesium.Cartesian3) {
+  const cameraDistance = Cesium.Cartesian3.magnitude(camera);
+  const pointDistance = Cesium.Cartesian3.magnitude(point);
+  if (cameraDistance <= Cesium.Ellipsoid.WGS84.maximumRadius || pointDistance === 0) return true;
+  const cosine = Cesium.Cartesian3.dot(camera, point) / (cameraDistance * pointDistance);
+  const horizonCosine = Cesium.Ellipsoid.WGS84.maximumRadius / cameraDistance;
+  return cosine >= horizonCosine - 0.005;
 }
 
 // ═══════════════════════════════════════════════════════

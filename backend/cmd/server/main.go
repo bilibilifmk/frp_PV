@@ -205,7 +205,6 @@ func main() {
 		api.GET("/settings", apiH.GetSettings)
 		api.POST("/settings", apiH.UpdateSettings)
 		api.POST("/settings/detect-location", apiH.DetectServerLocation)
-		api.GET("/frp-log", apiH.GetFRPLog)
 		api.GET("/firewall", apiH.GetFirewall)
 		api.POST("/firewall/add", apiH.AddFirewall)
 		api.POST("/firewall/remove", apiH.RemoveFirewall)
@@ -368,6 +367,7 @@ func main() {
 	distDir, _ := filepath.Abs(*staticDir)
 	r.Static("/assets", filepath.Join(distDir, "assets"))
 	r.Static("/cesium", filepath.Join(distDir, "cesium"))
+	r.Static("/img", filepath.Join(distDir, "img"))
 	r.StaticFile("/favicon.ico", filepath.Join(distDir, "favicon.ico"))
 	// SPA fallback: 所有未匹配路由返回 index.html
 	r.NoRoute(func(c *gin.Context) {

@@ -24,6 +24,10 @@ export default function Dashboard() {
   const [modal, setModal] = useState<string | null>(null);
   const [presentation, setPresentation] = useState(parsePresentationParams);
   const close = () => setModal(null);
+  const configuredServerName = config?.server_location.name?.trim();
+  const serverName = configuredServerName && configuredServerName !== '未知'
+    ? configuredServerName
+    : window.location.hostname || '本机服务器';
 
   useEffect(() => {
     const applyHash = () => {
@@ -90,7 +94,7 @@ export default function Dashboard() {
                         pb-[env(safe-area-inset-bottom)]">
           <span>FRP_PV v2.0</span>
           <span className="mx-2">·</span>
-          <span>服务器: {config.server_location.name || '未知'}</span>
+          <span>服务器: {serverName}</span>
         </div>
       )}
 

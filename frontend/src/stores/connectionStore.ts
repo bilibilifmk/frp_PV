@@ -19,6 +19,7 @@ interface ConnectionState {
   activeBannedIps: Set<string>;
   demoMode: boolean;
   demoQueue: DemoConnectionEvent[];
+  connectionOpenSequence: number;
 
   setInit: (data: ConnectionRecord[]) => void;
   addNewIp: (rec: ConnectionRecord) => void;
@@ -47,6 +48,7 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   // 演示会主动控制镜头，每次打开页面均保持关闭，由用户手动开启。
   demoMode: false,
   demoQueue: [],
+  connectionOpenSequence: 0,
 
   // ── init ──
   setInit: (data) => set({ allIpData: Array.isArray(data) ? data : [] }),
@@ -149,7 +151,11 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
           demoQueue = [...demoQueue, event].slice(-8);
         }
       }
-      return { activeConnections: map, demoQueue };
+      return {
+        activeConnections: map,
+        demoQueue,
+        connectionOpenSequence: s.connectionOpenSequence + 1,
+      };
     }),
 
   // ── connection_closed ──
@@ -176,7 +182,7 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
     }),
 
   setDemoMode: (enabled) => {
-    if (!enabled) recentDemoIPs.clear();
+    // 保留浏览器内的同 IP 去重缓存，避免短时间来回切换后重复播放相同连接。
     set({ demoMode: enabled, demoQueue: [] });
   },
 

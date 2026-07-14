@@ -10,6 +10,7 @@ all: cross frontend assemble
 
 # ── Go 后端 (本机) ──
 backend:
+	@mkdir -p $(DIST)
 	cd backend && go build -o ../$(BIN) ./cmd/server
 
 # ── React 前端 ──
@@ -26,11 +27,12 @@ assemble:
 
 # ── 交叉编译 (Linux amd64) ──
 cross:
+	@mkdir -p $(DIST)
 	cd backend && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ../$(BIN) ./cmd/server
 
 # ── 开发模式 ──
 dev-backend:
-	cd backend && go run ./cmd/server -db ../data/frp-pv.db -host 0.0.0.0 -port 5008 -static ../frontend/dist
+	cd backend && go run ./cmd/server -db ../data/frp-pv.db -host 0.0.0.0 -port 5508 -static ../frontend/dist
 
 dev-frontend:
 	cd frontend && npm run dev

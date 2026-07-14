@@ -80,6 +80,7 @@ func (h *AuthHandler) CheckAuth(c *gin.Context) {
 		"config": gin.H{
 			"server_location":     data.ServerLocation,
 			"home_country":        data.HomeCountry,
+			"firewall_mode":       data.FirewallMode,
 			"cesium_ion_token":    data.CesiumIonToken,
 		},
 	})

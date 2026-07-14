@@ -19,8 +19,9 @@ export default function App() {
 
   if (checking) {
     return (
-      <div className="flex items-center justify-center h-screen bg-gray-950">
-        <div className="animate-pulse text-brand-400 text-lg">加载中…</div>
+      <div className="flex h-dvh flex-col items-center justify-center gap-4 bg-gray-950">
+        <img src="/img/frppvlogo.png" alt="FRP_PV" className="h-16 w-16 animate-pulse rounded-2xl object-cover" />
+        <div className="text-xs tracking-[0.2em] text-brand-400">正在建立安全会话…</div>
       </div>
     );
   }

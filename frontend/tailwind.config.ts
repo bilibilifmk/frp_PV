@@ -18,6 +18,8 @@ export default {
         },
       },
       fontFamily: {
+        sans: ['"Smiley Sans Web"', '"得意黑"', '-apple-system', 'BlinkMacSystemFont', '"PingFang SC"', '"Microsoft YaHei UI"', 'system-ui', 'sans-serif'],
+        display: ['"Smiley Sans Web"', '"得意黑"', '"PingFang SC"', 'sans-serif'],
         mono: ['"JetBrains Mono"', '"Fira Code"', 'monospace'],
       },
     },

@@ -61,6 +61,7 @@ export type ImageryType =
 export interface AppConfig {
   server_location: ServerLocation;
   home_country: string;
+  firewall_mode: 'plugin' | 'iptables';
   cesium_ion_token: string;
 }
 
@@ -68,7 +69,6 @@ export interface AppConfig {
 export interface Settings {
   home_country: string;
   admin_username: string;
-  frp_log_path: string;
   server_location: ServerLocation;
   geo_cache: {
     normal_ttl_days: number;
@@ -79,13 +79,6 @@ export interface Settings {
   firewall_mode: 'plugin' | 'iptables';
   auto_ban: AutoBan;
   cesium_ion_token: string;
-}
-
-export interface FRPLogEntry {
-  time: string;
-  level: 'info' | 'warn' | 'error';
-  category: string;
-  message: string;
 }
 
 // ── WebSocket 数据模型 ──

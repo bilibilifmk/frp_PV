@@ -80,15 +80,15 @@ export default function ActiveModal({ open, onClose }: Props) {
     : '活跃连接 (0)';
 
   return (
-    <BaseModal open={open} onClose={onClose} title={titleText}>
-      <div className="max-h-[500px] overflow-y-auto">
+    <BaseModal open={open} onClose={onClose} title={titleText} width="max-w-5xl">
+      <div className="max-h-[68vh] overflow-y-auto">
         {groups.length === 0 && (
           <div className="text-center text-gray-600 text-xs py-6">无活跃连接</div>
         )}
 
         {/* 表头 */}
         {groups.length > 0 && (
-          <div className="grid grid-cols-[28px_1fr_auto_48px_56px] gap-x-2 px-3 py-1.5 text-[10px] text-gray-600 border-b border-gray-800 sticky top-0 bg-gray-900/95 z-10">
+          <div className="grid grid-cols-[40px_minmax(280px,1fr)_minmax(120px,auto)_72px_90px] gap-x-3 px-3 py-1.5 text-[10px] text-gray-600 border-b border-gray-800 sticky top-0 bg-gray-900/95 z-10">
             <span>#</span>
             <span>IP / 地理位置</span>
             <span>代理</span>
@@ -103,7 +103,7 @@ export default function ActiveModal({ open, onClose }: Props) {
           return (
             <div
               key={key}
-              className="grid grid-cols-[28px_1fr_auto_48px_56px] gap-x-2 items-center px-3 py-2 text-xs hover:bg-gray-800/40 border-b border-gray-800/40"
+              className="grid grid-cols-[40px_minmax(280px,1fr)_minmax(120px,auto)_72px_90px] gap-x-3 items-center px-3 py-2 text-xs hover:bg-gray-800/40 border-b border-gray-800/40"
             >
               {/* 序号 */}
               <span className="text-gray-600 text-[11px]">{i + 1}</span>

@@ -20,8 +20,8 @@ export default function BlockedModal({ open, onClose }: Props) {
   );
 
   return (
-    <BaseModal open={open} onClose={onClose} title={`拦截记录 (${sorted.length})`} width="max-w-xl">
-      <div className="max-h-[500px] overflow-y-auto space-y-1.5">
+    <BaseModal open={open} onClose={onClose} title={`拦截记录 (${sorted.length})`} width="max-w-5xl">
+      <div className="max-h-[68vh] overflow-y-auto space-y-1.5">
         {sorted.length === 0 && (
           <div className="text-center text-gray-600 text-xs py-6">无拦截记录</div>
         )}
